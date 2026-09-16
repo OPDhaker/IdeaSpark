@@ -20,7 +20,7 @@ export function Navbar() {
             <span>Home</span>
             <span className="text-[10px] text-gray-500 mt-0.5">ホーム</span>
           </Link>
-          <Link href="/event-details" className="flex flex-col items-center leading-none hover:text-white transition-colors">
+          <Link href="/playbook" className="flex flex-col items-center leading-none hover:text-white transition-colors">
             <span>Playbook</span>
             <span className="text-[10px] text-gray-500 mt-0.5">プレイブック</span>
           </Link>
