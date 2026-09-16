@@ -1,81 +1,113 @@
 "use server";
-
-import { and, count, eq, sql } from "drizzle-orm";
+import { randomUUID } from "node:crypto";
+import { and, count, eq } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
-import { db } from "@/db";
 import {
-  admins,
-  announcements,
   attendance,
+  auditLog,
   departments,
-  evaluationRounds,
   eventConfig,
-  members,
-  scores,
-  submissions,
+  ideas,
+  payments,
+  teamMembers,
   teams,
   tracks,
+  dbTeams,
+  dbMembers,
+  dbAttendance,
+  dbAdmins,
 } from "@/db/schema";
-import {
-  addMemberAtomically,
-  createPaymentRecord,
-  registerTeamWithMembers,
-  removeMemberAtomically,
-} from "@/db/transactions";
+import { db } from "@/lib";
 import { auth } from "@/lib/auth/server";
-import { getAdminActor, requireAdminRole } from "@/lib/roles";
+import { isAdmin } from "@/lib/roles";
 
-const MIN_MEMBERS = 2;
-const MAX_MEMBERS = 4;
-
-type MemberInput = {
-  name: string;
-  raNumber: string;
-  netId: string;
-  phoneNumber: string;
-  departmentCode: string;
-  facultyName: string;
-  facultyPhone: string;
-  facultyEmail: string;
-  isLeader?: boolean;
-};
-
-async function requireLead() {
+export async function getMyTeam() {
   const { data: session } = await auth.getSession();
-  if (!session?.user?.id || !session.user.email)
-    throw new Error("Not signed in");
-  return session.user;
-}
-
-async function getTeamFor(leadUserId: string) {
+  if (!session?.user?.id) return null;
   const [team] = await db
     .select()
     .from(teams)
-    .where(eq(teams.leadUserId, leadUserId))
-    .limit(1);
+    .where(eq(teams.leadUserId, session.user.id));
   return team ?? null;
 }
 
-async function assertBefore(
-  field: "registrationDeadline" | "submissionDeadline",
-) {
-  const [cfg] = await db
+async function requireLead() {
+  const { data: session } = await auth.getSession();
+  if (!session?.user?.id) throw new Error("Not signed in");
+  return session.user;
+}
+
+async function requireAdminActor() {
+  if (!(await isAdmin())) throw new Error("Unauthorized: admin only");
+  const { data: session } = await auth.getSession();
+  return session!.user;
+}
+
+export async function scanAttendance(attendanceCode: string) {
+  await requireAdminActor();
+
+  const code = attendanceCode.trim();
+
+  if (!code) {
+    throw new Error("Attendance code is required");
+  }
+
+  const [member] = await db
     .select()
-    .from(eventConfig)
-    .where(eq(eventConfig.id, 1))
-    .limit(1);
-  if (!cfg) throw new Error("Event configuration is not initialized");
-  if (Date.now() > cfg[field].getTime()) throw new Error("Deadline passed");
+    .from(dbMembers)
+    .where(eq(dbMembers.attendanceCode, code));
+
+  if (!member) {
+    throw new Error("Invalid attendance code");
+  }
+
+  const [team] = await db
+    .select()
+    .from(dbTeams)
+    .where(eq(dbTeams.id, member.teamId));
+
+  if (!team) {
+    throw new Error("Team not found for the member");
+  }
+
+  const eventDate = new Date().toISOString().slice(0, 10);
+
+  const [record] = await db
+    .insert(dbAttendance)
+    .values({
+      id: randomUUID(),
+      memberId: member.id,
+      eventDate,
+      scannedBy: null,
+    })
+    .onConflictDoNothing()
+    .returning();
+
+  if (!record) {
+    return {
+      status: "already_present",
+      member,
+      team,
+      eventDate,
+    };
+  }
+
+  return {
+    status: "recorded",
+    member,
+    team,
+    eventDate,
+    attendanceId: record.id,
+  };
 }
 
 async function log(
   actorUserId: string | null,
   action: string,
   targetType: string,
-  targetId: string,
+  targetId: number,
   meta?: unknown,
 ) {
-  const { auditLog } = await import("@/db/schema");
   await db.insert(auditLog).values({
     actorUserId,
     action,
@@ -85,59 +117,79 @@ async function log(
   });
 }
 
-export async function getDepartments() {
-  return db.select().from(departments).orderBy(departments.label);
-}
+const MIN_MEMBERS = 2;
+const MAX_MEMBERS = 4;
 
-export async function getTracks() {
-  return db.select().from(tracks).where(eq(tracks.isActive, true));
-}
+export type MemberInput = {
+  name: string;
+  raNumber: string;
+  phone: string;
+  netId: string;
+  department: string; // department code, see departments table
+  faName: string;
+  faMobile: string;
+  faEmail: string;
+};
 
-export async function createTeam(
-  name: string,
-  trackId: string,
-  membersInput: MemberInput[],
-) {
+export async function createTeam(name: string, trackId: number) {
   const user = await requireLead();
   await assertBefore("registrationDeadline");
-
-  if (!name.trim()) throw new Error("Team name is required");
-  if (membersInput.length < MIN_MEMBERS || membersInput.length > MAX_MEMBERS) {
-    throw new Error(`Team must contain ${MIN_MEMBERS}-${MAX_MEMBERS} members`);
-  }
-
-  const leaders = membersInput.filter((member) => member.isLeader);
-  if (leaders.length !== 1) throw new Error("Exactly one leader is required");
-
-  const existingTeam = await getTeamFor(user.id);
-  if (existingTeam) throw new Error("You already have a team");
-
-  const [track] = await db
-    .select()
-    .from(tracks)
-    .where(eq(tracks.id, trackId))
-    .limit(1);
-  if (!track || !track.isActive) throw new Error("Invalid or inactive track");
-
-  const team = await registerTeamWithMembers({
-    teamName: name.trim(),
-    trackId,
-    leaderUserId: user.id,
-    members: membersInput.map((member) => ({ ...member })),
-  });
-
-  await log(user.id, "team.create", "team", team.team.id, { trackId });
+  if (await getTeamFor(user.id)) throw new Error("You already have a team");
+  const [track] = await db.select().from(tracks).where(eq(tracks.id, trackId));
+  if (!track) throw new Error("Invalid track");
+  const [team] = await db
+    .insert(teams)
+    .values({ name, trackId, leadUserId: user.id })
+    .returning();
+  await log(user.id, "team.create", "team", team.id, { name, trackId });
   revalidatePath("/dashboard");
-  return team.team;
+  return team;
+}
+
+async function getTeamFor(leadUserId: string) {
+  const [team] = await db
+    .select()
+    .from(teams)
+    .where(eq(teams.leadUserId, leadUserId));
+  return team ?? null;
+}
+
+async function assertEditable(teamId: number) {
+  const [{ value: paid }] = await db
+    .select({ value: count() })
+    .from(payments)
+    .where(and(eq(payments.teamId, teamId), eq(payments.status, "approved")));
+  if (paid > 0) throw new Error("Team is locked after payment approval");
+}
+
+async function assertBefore(
+  field: "registrationDeadline" | "submissionDeadline",
+) {
+  const [cfg] = await db.select().from(eventConfig);
+  if (cfg?.[field] && Date.now() > cfg[field].getTime())
+    throw new Error("Deadline passed");
 }
 
 export async function addMember(input: MemberInput) {
   const user = await requireLead();
-  await assertBefore("registrationDeadline");
   const team = await getTeamFor(user.id);
   if (!team) throw new Error("Create your team first");
-
-  const member = await addMemberAtomically(team.id, input);
+  await assertEditable(team.id);
+  const [dept] = await db
+    .select()
+    .from(departments)
+    .where(eq(departments.code, input.department));
+  if (!dept) throw new Error("Invalid department code");
+  const [{ value: memberCount }] = await db
+    .select({ value: count() })
+    .from(teamMembers)
+    .where(eq(teamMembers.teamId, team.id));
+  if (memberCount >= MAX_MEMBERS)
+    throw new Error(`Team is full (max ${MAX_MEMBERS} members)`);
+  const [member] = await db
+    .insert(teamMembers)
+    .values({ ...input, teamId: team.id, attendanceCode: randomUUID() })
+    .returning();
   await log(user.id, "team.member.add", "team", team.id, {
     memberId: member.id,
   });
@@ -145,428 +197,146 @@ export async function addMember(input: MemberInput) {
   return member;
 }
 
-export async function removeMember(memberId: string) {
+export async function removeMember(memberId: number) {
   const user = await requireLead();
   const team = await getTeamFor(user.id);
   if (!team) throw new Error("No team");
-  await assertBefore("registrationDeadline");
-
-  const member = await removeMemberAtomically(team.id, memberId);
-  await log(user.id, "team.member.remove", "team", team.id, {
-    memberId: member.id,
-  });
+  await assertEditable(team.id);
+  const [member] = await db
+    .select()
+    .from(teamMembers)
+    .where(and(eq(teamMembers.id, memberId), eq(teamMembers.teamId, team.id)));
+  if (!member) throw new Error("Not your team member");
+  await db.delete(teamMembers).where(eq(teamMembers.id, memberId));
+  await log(user.id, "team.member.remove", "team", team.id, { memberId });
   revalidatePath("/dashboard");
 }
 
-export async function setTrack(trackId: string) {
+export async function setTrack(trackId: number) {
   const user = await requireLead();
   const team = await getTeamFor(user.id);
   if (!team) throw new Error("Create your team first");
-  await assertBefore("registrationDeadline");
-
-  const [activeRound] = await db
-    .select()
-    .from(evaluationRounds)
-    .where(eq(evaluationRounds.isActive, true))
-    .limit(1);
-
-  if (activeRound) {
-    const [submission] = await db
-      .select()
-      .from(submissions)
-      .where(
-        and(
-          eq(submissions.teamId, team.id),
-          eq(submissions.roundId, activeRound.id),
-        ),
-      )
-      .limit(1);
-
-    if (submission && submission.status !== "pending_submission") {
-      throw new Error(
-        "Track cannot be changed after submission review has started",
-      );
-    }
-  }
-
-  const [track] = await db
-    .select()
-    .from(tracks)
-    .where(and(eq(tracks.id, trackId), eq(tracks.isActive, true)))
-    .limit(1);
-  if (!track) throw new Error("Invalid or inactive track");
-
-  await db
-    .update(teams)
-    .set({ trackId, updatedAt: new Date() })
-    .where(eq(teams.id, team.id));
+  await assertEditable(team.id);
+  const [track] = await db.select().from(tracks).where(eq(tracks.id, trackId));
+  if (!track) throw new Error("Invalid track");
+  await db.update(teams).set({ trackId }).where(eq(teams.id, team.id));
   revalidatePath("/dashboard");
 }
 
-export async function submitSubmission(
-  roundId: string,
+export async function submitIdea(
   title: string,
   description: string,
-  driveLink: string,
+  pptLink: string,
+  round = 1,
 ) {
   const user = await requireLead();
   await assertBefore("submissionDeadline");
   const team = await getTeamFor(user.id);
   if (!team) throw new Error("Create your team first");
-
-  const [round] = await db
-    .select()
-    .from(evaluationRounds)
-    .where(eq(evaluationRounds.id, roundId))
-    .limit(1);
-  if (!round) throw new Error("Evaluation round not found");
-  if (!round.isActive) throw new Error("This evaluation round is not active");
-
+  if (team.status !== "approved")
+    throw new Error("Team not approved for submission");
   const [{ value: memberCount }] = await db
     .select({ value: count() })
-    .from(members)
-    .where(eq(members.teamId, team.id));
-
-  if (memberCount < MIN_MEMBERS) {
-    throw new Error("At least 2 members are required to submit");
-  }
-
+    .from(teamMembers)
+    .where(eq(teamMembers.teamId, team.id));
+  if (memberCount < MIN_MEMBERS)
+    throw new Error(`At least ${MIN_MEMBERS} members required to submit`);
   const [existing] = await db
     .select()
-    .from(submissions)
-    .where(
-      and(eq(submissions.teamId, team.id), eq(submissions.roundId, roundId)),
-    )
-    .limit(1);
-
-  if (existing?.status === "in_review" || existing?.status === "accepted") {
-    throw new Error("Submission cannot be resubmitted in its current state");
-  }
-
-  const submissionValues = {
-    title: title.trim() || null,
-    description: description.trim() || null,
-    driveLink: driveLink.trim(),
-    status: "in_review" as const,
-    submittedAt: new Date(),
-    updatedAt: new Date(),
-    reviewedBy: null,
-    reviewedAt: null,
-    remarks: null,
-  };
-
-  const [submission] = existing
-    ? await db
-        .update(submissions)
-        .set(submissionValues)
-        .where(eq(submissions.id, existing.id))
-        .returning()
-    : await db
-        .insert(submissions)
-        .values({
-          teamId: team.id,
-          roundId,
-          ...submissionValues,
-        })
-        .returning();
-
-  if (!submission) throw new Error("Failed to save submission");
-
-  await log(user.id, "submission.submit", "submission", submission.id, {
-    roundId,
-  });
+    .from(ideas)
+    .where(and(eq(ideas.teamId, team.id), eq(ideas.round, round)));
+  if (existing) throw new Error("Already submitted for this round");
+  const [idea] = await db
+    .insert(ideas)
+    .values({ teamId: team.id, title, description, pptLink, round })
+    .returning();
+  await log(user.id, "idea.submit", "idea", idea.id, { round });
   revalidatePath("/dashboard");
-  return submission;
+  return idea;
 }
 
-export async function getMyDashboard() {
-  const user = await requireLead();
-  const team = await getTeamFor(user.id);
-  if (!team) return null;
-  const [teamMembers, teamSubmissions] = await Promise.all([
-    db.select().from(members).where(eq(members.teamId, team.id)),
-    db.select().from(submissions).where(eq(submissions.teamId, team.id)),
-  ]);
-  return { team, members: teamMembers, submissions: teamSubmissions };
-}
-
-export async function createPaymentOrderRecord(razorpayOrderId: string) {
+export async function submitPayment(
+  amount: number,
+  txnRef: string,
+  screenshotUrl?: string,
+) {
   const user = await requireLead();
   const team = await getTeamFor(user.id);
   if (!team) throw new Error("Create your team first");
-
-  const [submission] = await db
+  const [unpaid] = await db
     .select()
-    .from(submissions)
-    .where(
-      and(eq(submissions.teamId, team.id), eq(submissions.status, "accepted")),
-    )
-    .limit(1);
-  if (!submission) {
-    throw new Error("Payment is available only after acceptance");
-  }
-
-  const [cfg] = await db
-    .select()
-    .from(eventConfig)
-    .where(eq(eventConfig.id, 1))
-    .limit(1);
-  if (!cfg) throw new Error("Event configuration is not initialized");
-
-  const payment = await createPaymentRecord({
-    teamId: team.id,
-    razorpayOrderId,
-    amount: String(cfg.registrationFee),
-  });
-
-  await log(user.id, "payment.order.create", "payment", payment.id);
+    .from(ideas)
+    .where(and(eq(ideas.teamId, team.id), eq(ideas.status, "accepted_unpaid")));
+  if (!unpaid) throw new Error("Pay only after your idea is accepted");
+  if (amount <= 0 || !Number.isInteger(amount))
+    throw new Error("Invalid amount (integer paise required)");
+  const [payment] = await db
+    .insert(payments)
+    .values({ teamId: team.id, amount, txnRef, screenshotUrl })
+    .returning();
+  await log(user.id, "payment.submit", "payment", payment.id, { amount });
   revalidatePath("/dashboard");
   return payment;
 }
 
-export async function addAdmin(
-  email: string,
-  name: string,
-  role: "super_admin" | "evaluator" | "volunteer",
-) {
-  await requireAdminRole(["super_admin"]);
-  const [admin] = await db
-    .insert(admins)
-    .values({
-      email: email.trim().toLowerCase(),
-      name: name.trim(),
-      role,
-    })
-    .returning();
-  return admin;
-}
-
-export async function listAdmins() {
-  await requireAdminRole(["super_admin"]);
-  return db
-    .select({
-      id: admins.id,
-      name: admins.name,
-      email: admins.email,
-      role: admins.role,
-      createdAt: admins.createdAt,
-    })
-    .from(admins)
-    .orderBy(admins.createdAt);
-}
-
-export async function updateEventConfig(input: {
-  registrationDeadline: Date;
-  submissionDeadline: Date;
-  registrationFee: string;
-}) {
-  const admin = await requireAdminRole(["super_admin"]);
-  if (input.registrationDeadline > input.submissionDeadline) {
-    throw new Error(
-      "Registration deadline cannot be after submission deadline",
-    );
-  }
-  const [config] = await db
-    .update(eventConfig)
-    .set({
-      registrationDeadline: input.registrationDeadline,
-      submissionDeadline: input.submissionDeadline,
-      registrationFee: input.registrationFee,
-      updatedAt: new Date(),
-    })
-    .where(eq(eventConfig.id, 1))
-    .returning();
-  if (!config) throw new Error("Event configuration is not initialized");
-  await log(admin.id, "config.update", "event_config", "1");
-  revalidatePath("/admin");
-  return config;
-}
-
-export async function createEvaluationRound(
-  name: string,
-  description: string | undefined,
-  sequenceNo: number,
-) {
-  const admin = await requireAdminRole(["super_admin"]);
-  if (!Number.isInteger(sequenceNo) || sequenceNo < 1)
-    throw new Error("Invalid sequence number");
-  const [round] = await db
-    .insert(evaluationRounds)
-    .values({
-      name: name.trim(),
-      description: description?.trim() || null,
-      sequenceNo,
-    })
-    .returning();
-  await log(admin.id, "round.create", "round", round.id, { sequenceNo });
-  revalidatePath("/admin");
-  return round;
-}
-
-export async function setActiveEvaluationRound(
-  roundId: string,
-  isActive: boolean,
-) {
-  const admin = await requireAdminRole(["super_admin"]);
-  const [round] = await db
-    .select()
-    .from(evaluationRounds)
-    .where(eq(evaluationRounds.id, roundId))
-    .limit(1);
-  if (!round) throw new Error("Round not found");
-
-  await db.transaction(async (tx) => {
-    if (isActive) {
-      await tx
-        .update(evaluationRounds)
-        .set({ isActive: false })
-        .where(eq(evaluationRounds.isActive, true));
-    }
-    await tx
-      .update(evaluationRounds)
-      .set({ isActive })
-      .where(eq(evaluationRounds.id, roundId));
-  });
-
-  await log(admin.id, "round.activate", "round", roundId, { isActive });
-  revalidatePath("/admin");
-  revalidatePath("/dashboard/leaderboard");
-}
-
-export async function createAnnouncement(title: string, body: string) {
-  const admin = await requireAdminRole(["super_admin", "volunteer"]);
-  const [announcement] = await db
-    .insert(announcements)
-    .values({
-      title: title.trim(),
-      body: body.trim(),
-    })
-    .returning();
-  await log(admin.id, "announcement.create", "announcement", announcement.id);
-  revalidatePath("/");
-  return announcement;
-}
-
-export async function reviewSubmission(
-  submissionId: string,
-  status: "accepted" | "rejected",
-  remarks?: string,
-) {
-  const admin = await requireAdminRole(["super_admin"]);
-  const [submission] = await db
-    .update(submissions)
-    .set({
-      status,
-      reviewedBy: admin.id,
-      reviewedAt: new Date(),
-      remarks: remarks?.trim() || null,
-      updatedAt: new Date(),
-    })
-    .where(eq(submissions.id, submissionId))
-    .returning();
-  if (!submission) throw new Error("Submission not found");
-  await log(admin.id, `submission.${status}`, "submission", submissionId, {
-    remarks,
-  });
-  revalidatePath("/admin");
-  revalidatePath("/dashboard");
-  return submission;
-}
-
 export async function setTeamStatus(
-  teamId: string,
+  teamId: number,
   status: "pending" | "approved" | "rejected",
 ) {
-  const admin = await requireAdminRole(["super_admin"]);
+  const admin = await requireAdminActor();
   const [team] = await db
     .update(teams)
-    .set({
-      status,
-      reviewedBy: admin.id,
-      reviewedAt: new Date(),
-      updatedAt: new Date(),
-    })
+    .set({ status, reviewedBy: admin.id, reviewedAt: new Date() })
     .where(eq(teams.id, teamId))
     .returning();
   if (!team) throw new Error("Team not found");
   await log(admin.id, `team.${status}`, "team", teamId);
   revalidatePath("/admin");
   revalidatePath("/dashboard");
-  return team;
 }
 
-export async function upsertScore(
-  roundId: string,
-  teamId: string,
-  score: number,
-  remarks?: string,
+export async function reviewIdea(
+  ideaId: number,
+  status: "in_review" | "accepted_unpaid" | "accepted_paid" | "rejected",
 ) {
-  const admin = await requireAdminRole(["evaluator", "super_admin"]);
-  if (!Number.isFinite(score) || score < 0 || score > 100)
-    throw new Error("Score must be between 0 and 100");
-
-  const [row] = await db
-    .insert(scores)
-    .values({
-      teamId,
-      roundId,
-      evaluatorId: admin.id,
-      score: score.toFixed(2),
-      remarks: remarks?.trim() || null,
-    })
-    .onConflictDoUpdate({
-      target: [scores.teamId, scores.roundId, scores.evaluatorId],
-      set: { score: score.toFixed(2), remarks: remarks?.trim() || null },
-    })
+  const admin = await requireAdminActor();
+  const [idea] = await db
+    .update(ideas)
+    .set({ status })
+    .where(eq(ideas.id, ideaId))
     .returning();
-
-  await log(admin.id, "score.upsert", "team", teamId, { roundId, score });
-  revalidatePath("/dashboard/leaderboard");
-  return row;
+  if (!idea) throw new Error("Idea not found");
+  await log(admin.id, `idea.${status}`, "idea", ideaId);
+  revalidatePath("/admin");
+  revalidatePath("/dashboard");
 }
 
-export async function scanAttendance(
-  attendanceCode: string,
-  eventDate?: string,
+export async function reviewPayment(
+  paymentId: number,
+  status: "approved" | "rejected",
 ) {
-  const admin = await requireAdminRole(["volunteer", "super_admin"]);
-  const dateValue = eventDate ?? new Date().toISOString().slice(0, 10);
-
-  const [member] = await db
-    .select()
-    .from(members)
-    .where(eq(members.attendanceCode, attendanceCode))
-    .limit(1);
-  if (!member) throw new Error("Invalid attendance code");
-
-  const [row] = await db
-    .insert(attendance)
-    .values({ memberId: member.id, eventDate: dateValue, scannedBy: admin.id })
-    .onConflictDoNothing({
-      target: [attendance.memberId, attendance.eventDate],
-    })
+  const admin = await requireAdminActor();
+  const [payment] = await db
+    .update(payments)
+    .set({ status, reviewedBy: admin.id, reviewedAt: new Date() })
+    .where(eq(payments.id, paymentId))
     .returning();
-
-  return { memberId: member.id, alreadyPresent: !row, attendance: row ?? null };
-}
-
-export async function publishResults(enabled: boolean) {
-  const admin = await requireAdminRole(["super_admin"]);
-  await db
-    .update(eventConfig)
-    .set({ resultsPublished: enabled, updatedAt: new Date() })
-    .where(eq(eventConfig.id, 1));
-  await log(admin.id, "results.publish", "event_config", "1", { enabled });
-  revalidatePath("/dashboard/leaderboard");
-}
-
-export async function getAdminAnnouncements() {
-  return db
-    .select()
-    .from(announcements)
-    .orderBy(sql`${announcements.createdAt} desc`);
-}
-
-export async function getCurrentAdmin() {
-  return getAdminActor();
+  if (!payment) throw new Error("Payment not found");
+  if (status === "approved") {
+    // neon-http has no interactive transactions; batch = atomic round trip
+    await db.batch([
+      db
+        .update(ideas)
+        .set({ status: "accepted_paid" })
+        .where(
+          and(
+            eq(ideas.teamId, payment.teamId),
+            eq(ideas.status, "accepted_unpaid"),
+          ),
+        ),
+    ]);
+  }
+  await log(admin.id, `payment.${status}`, "payment", paymentId);
+  revalidatePath("/admin");
+  revalidatePath("/dashboard");
 }
