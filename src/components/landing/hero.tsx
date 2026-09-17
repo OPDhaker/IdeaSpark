@@ -1,111 +1,84 @@
-"use client";
-
+import { Sparkles } from "lucide-react";
 import Image from "next/image";
 import Link from "next/link";
-import { useEffect, useRef } from "react";
+import { outlinePill, solidPill } from "@/components/landing/pill";
+import type { CtaState } from "@/lib/auth/cta";
 
-export function Hero() {
-  const videoRef = useRef<HTMLVideoElement>(null);
-  const wrapperRef = useRef<HTMLDivElement>(null);
+const cta: Record<CtaState, { href: string; label: string }> = {
+  "signed-out": { href: "/register", label: "Register" },
+  "no-team": { href: "/register", label: "Register" },
+  "has-team": { href: "/dashboard", label: "Dashboard" },
+};
 
-  useEffect(() => {
-    const video = videoRef.current;
-    if (video) {
-      video.muted = true;
-      video.play().catch((err) => {
-        console.error("Video autoplay was blocked:", err);
-      });
-    }
-  }, []);
-
-  useEffect(() => {
-    let ticking = false;
-
-    const handleScroll = () => {
-      if (!ticking) {
-        window.requestAnimationFrame(() => {
-          const scrollY = window.scrollY;
-          if (wrapperRef.current) {
-            // Video moves slower than scroll (0.4x speed) for parallax depth
-            wrapperRef.current.style.transform = `translateY(${scrollY * 0.4}px)`;
-          }
-          ticking = false;
-        });
-        ticking = true;
-      }
-    };
-
-    window.addEventListener("scroll", handleScroll, { passive: true });
-    return () => window.removeEventListener("scroll", handleScroll);
-  }, []);
-
+function VerticalLabel({
+  children,
+  height,
+  direction,
+}: {
+  children: string;
+  height: string;
+  direction: "left" | "right";
+}) {
   return (
-    <section className="relative overflow-hidden min-h-screen flex flex-col justify-end px-6 pb-16">
-      {/* Parallax wrapper - taller than viewport so edges never show while translating */}
-      <div ref={wrapperRef} className="absolute inset-0 -top-20 -bottom-20 z-0 will-change-transform">
-        <video
-          ref={videoRef}
-          autoPlay
-          loop
-          muted
-          playsInline
-          preload="auto"
-          className="w-full h-full object-cover"
-        >
-          <source src="/landing/hero-video.mp4" type="video/mp4" />
-        </video>
-      </div>
-
-      <div className="absolute inset-0 bg-black/60 z-10" />
-
-     <span
-  className="hidden md:block absolute left-4 top-24 text-white/30 text-xs tracking-[0.3em] font-medium z-20 font-oswald"
-  style={{ writingMode: "vertical-rl" }}
->
-        ファウンダーズ・クラブ
-      </span>
-
-      <span
-        className="hidden md:block absolute right-4 top-32 text-white/30 text-xs tracking-[0.3em] font-medium z-20"
-        style={{ writingMode: "vertical-rl" }}
+    <div
+      className={`hidden w-[23px] shrink-0 items-center justify-center md:flex ${height}`}
+    >
+      <p
+        className={`whitespace-nowrap text-[32px] font-bold leading-5 tracking-[-0.06em] text-foreground ${
+          direction === "left" ? "rotate-90" : "-rotate-90"
+        }`}
       >
-        情熱を持って闘え
-      </span>
+        {children}
+      </p>
+    </div>
+  );
+}
 
-      <div className="absolute top-25 left-30 z-20">
-        <div className="inline-flex flex-col items-center bg-[#4a5c3a]/50 text-white rounded-full px-8 py-1.5 backdrop-blur-sm">
-          <span className="flex items-center gap-1.5 text-xs font-medium">
-            Ask AI <span aria-hidden></span>
-          </span>
-          <span className="text-[9px] text-white/50 mt-0.5">AIに質問</span>
+export function Hero({ ctaState }: { ctaState: CtaState }) {
+  return (
+    <section className="relative isolate flex min-h-screen w-full flex-col justify-end overflow-x-clip bg-background px-6 pb-10 pt-32 text-foreground md:p-16 md:pt-32">
+      <div className="relative mx-auto flex w-full max-w-section flex-1 flex-col justify-end">
+        {/* Background art: character cutout over two blurred colour blobs */}
+        <div className="pointer-events-none absolute -bottom-10 right-0 z-0 aspect-square w-[85%] max-w-[690px] opacity-40 md:-bottom-16 md:w-[54%] md:opacity-100">
+          <div className="absolute left-[34%] top-[30%] aspect-square w-[33%] rounded-full bg-primary blur-[60px]" />
+          <div className="absolute -bottom-[6%] left-[38%] h-[10%] w-[33%] rounded-full bg-foreground blur-[60px]" />
+          <Image
+            src="/landing/heroImg.svg"
+            alt=""
+            fill
+            sizes="(max-width: 768px) 85vw, 54vw"
+            className="object-contain"
+            priority
+          />
         </div>
-      </div>
 
-      <div className="hidden md:block absolute bottom-4 right-1 z-15 w-[520px] h-[480px]">
-        <Image src="/landing/corner-image.png" alt="" fill className="object-contain" />
-      </div>
+        <div className="relative z-10 flex w-full items-end justify-between gap-4">
+          <div className="flex flex-col items-start gap-0.5">
+            <VerticalLabel height="h-[332px]" direction="left">
+              ファウンダーズ・クラブ
+            </VerticalLabel>
 
-      <div className="max-w-7xl mx-auto relative z-20 w-full">
-        <h1 className="text-20xl md:text-8xl font-bold tracking-tight text-white max-w-xl">
-          IdeaSpark 3.0
-        </h1>
-        <p className="text-xs text-white/40 mt-1 tracking-wide">アイデアスパーク 3.0</p>
+            <h1 className="text-[clamp(2.75rem,11vw,128px)] font-bold leading-none tracking-[-0.06em] text-foreground">
+              IdeaSpark 3.0
+            </h1>
 
-        <div className="flex flex-wrap gap-3 mt-6">
-          <Link
-            href="/register"
-            className="flex flex-col items-center bg-[#4a5c3a] text-white rounded-full px-6 py-2.5 font-medium hover:bg-[#566b44] transition-colors"
-          >
-            <span>Register</span>
-            <span className="text-[9px] text-white/50 font-normal mt-0.5">登録</span>
-          </Link>
-          <Link
-            href="/event-details"
-            className="flex flex-col items-center border border-white/30 text-white rounded-full px-6 py-2.5 font-medium hover:bg-white/10 transition-colors"
-          >
-            <span>Playbook</span>
-            <span className="text-[9px] text-white/50 font-normal mt-0.5">プレイブック</span>
-          </Link>
+            <div className="mt-4 flex flex-wrap items-start gap-4">
+              <Link href={cta[ctaState].href} className={solidPill}>
+                {cta[ctaState].label}
+              </Link>
+              <Link href="/playbook" className={outlinePill}>
+                Playbook
+              </Link>
+              <button type="button" disabled className={`${outlinePill} gap-2`}>
+                Ask AI
+                <Sparkles aria-hidden className="size-[13px]" />
+              </button>
+            </div>
+          </div>
+
+          <VerticalLabel height="h-[362px]" direction="right">
+            決意し、火をつけ、導く。
+          </VerticalLabel>
         </div>
       </div>
     </section>

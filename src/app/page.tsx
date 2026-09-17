@@ -1,22 +1,29 @@
-import { Navbar } from "@/components/landing/navbar";
-import { Hero } from "@/components/landing/hero";
-import { InfoCards } from "@/components/landing/info-cards";
 import { CtaBanner } from "@/components/landing/cta-banner";
 import { FadeInSection } from "@/components/landing/fade-in-section";
+import { Footer } from "@/components/landing/footer";
+import { Hero } from "@/components/landing/hero";
+import { InfoCards } from "@/components/landing/info-cards";
+import { Navbar } from "@/components/landing/navbar";
+import { getCtaState } from "@/lib/auth/cta";
 
-export default function Home() {
+export default async function Home() {
+  const ctaState = await getCtaState();
+
   return (
-    <div className="min-h-screen bg-[#0a0a0a]">
-      <Navbar />
+    <div className="min-h-screen bg-background">
+      <Navbar ctaState={ctaState} />
       <main>
-        <Hero />
+        <Hero ctaState={ctaState} />
         <FadeInSection>
           <InfoCards />
         </FadeInSection>
         <FadeInSection delay={150}>
-          <CtaBanner />
+          <CtaBanner ctaState={ctaState} />
         </FadeInSection>
       </main>
+      <FadeInSection delay={200}>
+        <Footer />
+      </FadeInSection>
     </div>
   );
 }

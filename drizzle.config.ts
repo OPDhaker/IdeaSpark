@@ -11,6 +11,10 @@ export default defineConfig({
   out: "./drizzle",
   schema: "./src/db/schema.ts",
   dialect: "postgresql",
+  // Without this, drizzle treats every schema in the database as its own and
+  // proposes dropping `neon_auth` — the Managed Better Auth tables holding
+  // users, sessions and accounts. Keep push/introspect scoped to `public`.
+  schemaFilter: ["public"],
   dbCredentials: {
     url: databaseUrl,
   },

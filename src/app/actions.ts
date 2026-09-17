@@ -279,6 +279,11 @@ export async function submitSubmission(
   return submission;
 }
 
+export async function getMyTeam() {
+  const user = await requireLead();
+  return getTeamFor(user.id);
+}
+
 export async function getMyDashboard() {
   const user = await requireLead();
   const team = await getTeamFor(user.id);

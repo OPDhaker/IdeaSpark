@@ -11,8 +11,8 @@
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
     "db:push": "drizzle-kit push",
-    "db:seed": "tsx scripts/seed.ts",
-    "db:verify": "tsx scripts/verify-db.ts"
+    "db:seed": "bun scripts/seed.ts",
+    "db:verify": "bun scripts/verify-db.ts"
   },
   "dependencies": {
     "@mdx-js/loader": "^3.1.1",
@@ -20,9 +20,11 @@
     "@neondatabase/auth": "^0.5.0-beta",
     "@neondatabase/serverless": "^1.1.0",
     "@next/mdx": "16.3.5",
+    "animejs": "^4.5.0",
     "better-auth": "^1.7.4",
     "dotenv": "^17.4.2",
     "drizzle-orm": "^1.0.0-rc.4",
+    "lucide-react": "^1.47.0",
     "next": "16.3.5",
     "react": "19.2.8",
     "react-dom": "19.2.8",
