@@ -535,19 +535,37 @@ export async function scanAttendance(
   const [member] = await db
     .select()
     .from(members)
-    .where(eq(members.attendanceCode, attendanceCode))
+    .where(eq(members.attendanceCode, attendanceCode.trim()))
     .limit(1);
+
   if (!member) throw new Error("Invalid attendance code");
+
+  const [team] = await db
+    .select()
+    .from(teams)
+    .where(eq(teams.id, member.teamId))
+    .limit(1);
+
+  if (!team) throw new Error("Team not found for member");
 
   const [row] = await db
     .insert(attendance)
-    .values({ memberId: member.id, eventDate: dateValue, scannedBy: admin.id })
+    .values({
+      memberId: member.id,
+      eventDate: dateValue,
+      scannedBy: admin.id,
+    })
     .onConflictDoNothing({
       target: [attendance.memberId, attendance.eventDate],
     })
     .returning();
 
-  return { memberId: member.id, alreadyPresent: !row, attendance: row ?? null };
+  return {
+    member,
+    team,
+    alreadyPresent: !row,
+    attendance: row ?? null,
+  };
 }
 
 export async function publishResults(enabled: boolean) {
