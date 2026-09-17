@@ -1,0 +1,7 @@
+# IdeaSpark 3.0 Playbook
+
+> IdeaSpark 3.0 is a two-day ideathon on 5 and 6 October, run by Futurix Technical Club. Values marked TODO are unconfirmed.
+
+## Playbook
+
+- [Playbook](playbook.md): Dates, schedule, eligibility, rules, judging, prizes, FAQ and contact details.
