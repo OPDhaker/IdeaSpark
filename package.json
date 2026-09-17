@@ -15,6 +15,7 @@
     "db:verify": "bun scripts/verify-db.ts"
   },
   "dependencies": {
+    "@hookform/resolvers": "^5.9.1",
     "@mdx-js/loader": "^3.1.1",
     "@mdx-js/react": "^3.1.1",
     "@neondatabase/auth": "^0.5.0-beta",
@@ -22,13 +23,19 @@
     "@next/mdx": "16.3.5",
     "animejs": "^4.5.0",
     "better-auth": "^1.7.4",
+    "class-variance-authority": "^0.7.1",
+    "clsx": "^2.1.1",
     "dotenv": "^17.4.2",
     "drizzle-orm": "^1.0.0-rc.4",
     "lucide-react": "^1.47.0",
     "next": "16.3.5",
+    "radix-ui": "^1.6.7",
     "react": "19.2.8",
     "react-dom": "19.2.8",
-    "remark-gfm": "^4.0.1"
+    "react-hook-form": "^7.88.0",
+    "remark-gfm": "^4.0.1",
+    "tailwind-merge": "^3.7.0",
+    "zod": "^4.6.5"
   },
   "devDependencies": {
     "@biomejs/biome": "2.4.2",
@@ -38,6 +45,7 @@
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "drizzle-kit": "^1.0.0-rc.4",
+    "shadcn": "^4.21.0",
     "tailwindcss": "^4",
     "tsx": "^4.23.13",
     "typescript": "^5"

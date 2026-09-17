@@ -1,6 +1,6 @@
 "use server";
 
-import { and, count, eq, sql } from "drizzle-orm";
+import { and, count, eq, inArray, or, sql } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { db } from "@/db";
 import {
@@ -24,6 +24,11 @@ import {
 } from "@/db/transactions";
 import { auth } from "@/lib/auth/server";
 import { getAdminActor, requireAdminRole } from "@/lib/roles";
+import {
+  type RegistrationValues,
+  registrationSchema,
+  toRoster,
+} from "@/lib/validation/registration";
 
 const MIN_MEMBERS = 2;
 const MAX_MEMBERS = 4;
@@ -90,45 +95,246 @@ export async function getDepartments() {
 }
 
 export async function getTracks() {
-  return db.select().from(tracks).where(eq(tracks.isActive, true));
+  return db
+    .select()
+    .from(tracks)
+    .where(eq(tracks.isActive, true))
+    .orderBy(tracks.name);
+}
+
+export type RegistrationFieldError = { path: string; message: string };
+
+export type CreateTeamResult =
+  | { ok: true; teamId: string }
+  | { ok: false; formError?: string; fieldErrors: RegistrationFieldError[] };
+
+/**
+ * Constraint name behind a unique violation, or null.
+ *
+ * Two traps here, both verified against the live DB:
+ *  - Drizzle wraps driver errors, so the pg error sits on `.cause`, not on the
+ *    thrown `DrizzleQueryError`.
+ *  - `instanceof DatabaseError` is `false` even for a genuine `DatabaseError`,
+ *    because the class reachable from the package entry point is not the one
+ *    the driver constructs. Duck-type on `code` instead.
+ */
+function uniqueViolationConstraint(error: unknown): string | null {
+  let current: unknown = error;
+  for (let depth = 0; current && depth < 5; depth += 1) {
+    const candidate = current as {
+      code?: unknown;
+      constraint?: unknown;
+      cause?: unknown;
+    };
+    if (candidate.code === "23505") {
+      return typeof candidate.constraint === "string"
+        ? candidate.constraint
+        : null;
+    }
+    current = candidate.cause;
+  }
+  return null;
+}
+
+/** Roster index -> RHF path. Index 0 is always the leader. */
+function rosterPath(index: number, field: string) {
+  return index === 0 ? `leader.${field}` : `members.${index - 1}.${field}`;
 }
 
 export async function createTeam(
-  name: string,
-  trackId: string,
-  membersInput: MemberInput[],
-) {
+  values: RegistrationValues,
+): Promise<CreateTeamResult> {
   const user = await requireLead();
-  await assertBefore("registrationDeadline");
 
-  if (!name.trim()) throw new Error("Team name is required");
-  if (membersInput.length < MIN_MEMBERS || membersInput.length > MAX_MEMBERS) {
+  // Returned, not thrown: Next redacts thrown Server Action errors in
+  // production, so a thrown "Registration has closed" would reach the user as
+  // a generic "An error occurred". Only faults the user cannot act on stay as
+  // throws.
+  try {
+    await assertBefore("registrationDeadline");
+  } catch {
+    return {
+      ok: false,
+      formError: "Registration is closed.",
+      fieldErrors: [],
+    };
+  }
+
+  // The client validates with this same schema, but the client is not a trust
+  // boundary — a server action is a public HTTP endpoint.
+  const parsed = registrationSchema.safeParse(values);
+  if (!parsed.success) {
+    return {
+      ok: false,
+      fieldErrors: parsed.error.issues.map((issue) => ({
+        path: issue.path.join("."),
+        message: issue.message,
+      })),
+    };
+  }
+
+  const roster = toRoster(parsed.data);
+  if (roster.length < MIN_MEMBERS || roster.length > MAX_MEMBERS) {
     throw new Error(`Team must contain ${MIN_MEMBERS}-${MAX_MEMBERS} members`);
   }
 
-  const leaders = membersInput.filter((member) => member.isLeader);
-  if (leaders.length !== 1) throw new Error("Exactly one leader is required");
-
   const existingTeam = await getTeamFor(user.id);
-  if (existingTeam) throw new Error("You already have a team");
+  if (existingTeam) {
+    return {
+      ok: false,
+      formError: "You already have a team.",
+      fieldErrors: [],
+    };
+  }
+
+  const { teamName, trackId } = parsed.data.team;
 
   const [track] = await db
     .select()
     .from(tracks)
     .where(eq(tracks.id, trackId))
     .limit(1);
-  if (!track || !track.isActive) throw new Error("Invalid or inactive track");
+  if (!track || !track.isActive) {
+    return {
+      ok: false,
+      fieldErrors: [
+        { path: "team.trackId", message: "That track is no longer available." },
+      ],
+    };
+  }
 
-  const team = await registerTeamWithMembers({
-    teamName: name.trim(),
-    trackId,
-    leaderUserId: user.id,
-    members: membersInput.map((member) => ({ ...member })),
-  });
+  // Every department code must exist — it is an FK, and a stale option in the
+  // client's select would otherwise surface as a foreign-key error.
+  const codes = [...new Set(roster.map((member) => member.departmentCode))];
+  const known = await db
+    .select({ code: departments.code })
+    .from(departments)
+    .where(inArray(departments.code, codes));
+  const knownCodes = new Set(known.map((row) => row.code));
+  const badDepartments = roster.flatMap((member, index) =>
+    knownCodes.has(member.departmentCode)
+      ? []
+      : [
+          {
+            path: rosterPath(index, "departmentCode"),
+            message: "Pick a department from the list.",
+          },
+        ],
+  );
+  if (badDepartments.length) {
+    return { ok: false, fieldErrors: badDepartments };
+  }
+
+  let team: Awaited<ReturnType<typeof registerTeamWithMembers>>;
+  try {
+    team = await registerTeamWithMembers({
+      teamName,
+      trackId,
+      leaderUserId: user.id,
+      members: roster,
+    });
+  } catch (error) {
+    const fieldErrors = await translateRegistrationConflict(error, roster);
+    if (fieldErrors) return fieldErrors;
+    throw error;
+  }
 
   await log(user.id, "team.create", "team", team.team.id, { trackId });
   revalidatePath("/dashboard");
-  return team.team;
+  revalidatePath("/register");
+  return { ok: true, teamId: team.team.id };
+}
+
+/**
+ * Turns a unique-constraint violation into per-field messages the form can
+ * attach. The constraint name says *which column* collided but not which
+ * member row, so one lookup finds the offending values and maps them back to
+ * roster positions.
+ */
+async function translateRegistrationConflict(
+  error: unknown,
+  roster: MemberInput[],
+): Promise<{
+  ok: false;
+  formError?: string;
+  fieldErrors: RegistrationFieldError[];
+} | null> {
+  const constraint = uniqueViolationConstraint(error);
+  if (!constraint) return null;
+
+  // Matched by substring, not equality: the applied migration declares these
+  // inline so Postgres named them `<table>_<column>_key`, while a future
+  // `drizzle-kit generate` from schema.ts would name them `..._unique`.
+  // Substring matching survives both.
+  if (constraint.includes("team_name")) {
+    return {
+      ok: false,
+      fieldErrors: [
+        {
+          path: "team.teamName",
+          message: "That team name is taken. Pick another.",
+        },
+      ],
+    };
+  }
+
+  if (constraint.includes("lead_user_id")) {
+    return {
+      ok: false,
+      formError: "You already have a team.",
+      fieldErrors: [],
+    };
+  }
+
+  if (constraint.includes("ra_number") || constraint.includes("net_id")) {
+    const taken = await db
+      .select({ raNumber: members.raNumber, netId: members.netId })
+      .from(members)
+      .where(
+        or(
+          inArray(
+            members.raNumber,
+            roster.map((member) => member.raNumber),
+          ),
+          inArray(
+            members.netId,
+            roster.map((member) => member.netId),
+          ),
+        ),
+      );
+
+    const takenRa = new Set(taken.map((row) => row.raNumber));
+    const takenNetId = new Set(taken.map((row) => row.netId));
+
+    const fieldErrors = roster.flatMap((member, index) => [
+      ...(takenRa.has(member.raNumber)
+        ? [
+            {
+              path: rosterPath(index, "raNumber"),
+              message: "This RA number is already registered.",
+            },
+          ]
+        : []),
+      ...(takenNetId.has(member.netId)
+        ? [
+            {
+              path: rosterPath(index, "netId"),
+              message: "This netID is already registered.",
+            },
+          ]
+        : []),
+    ]);
+
+    return {
+      ok: false,
+      formError: fieldErrors.length
+        ? undefined
+        : "Someone in your team is already registered.",
+      fieldErrors,
+    };
+  }
+
+  return null;
 }
 
 export async function addMember(input: MemberInput) {
