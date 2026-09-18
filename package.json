@@ -9,7 +9,7 @@
     "lint": "biome check",
     "format": "biome format --write",
     "db:generate": "drizzle-kit generate",
-    "db:migrate": "drizzle-kit migrate",
+    "db:migrate": "bun scripts/migrate.ts",
     "db:push": "drizzle-kit push",
     "db:seed": "bun scripts/seed.ts",
     "db:verify": "bun scripts/verify-db.ts"
