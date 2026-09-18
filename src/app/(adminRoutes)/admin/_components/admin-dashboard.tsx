@@ -20,7 +20,7 @@ type ReviewData = {
     teamName: string;
     trackId: string | null;
     trackName: string | null;
-    status: "pending" | "approved" | "rejected";
+    status: "pending_submission" | "in_review" | "rejected" | "accepted";
     paymentStatus: "unpaid" | "paid" | null;
   }>;
   rounds: Array<{
@@ -131,9 +131,16 @@ export function AdminDashboard({ data }: { data: ReviewData }) {
     );
   }
 
-  function handleTeamStatus(status: "approved" | "rejected" | "pending") {
+  // Teams and submissions share one lifecycle enum, so a team is `accepted`,
+  // never `approved`. See `reviewStatusEnum` in src/db/schema.ts.
+  function handleTeamStatus(
+    status: "accepted" | "rejected" | "pending_submission",
+  ) {
     if (!selectedTeam) return;
-    return run(() => setTeamStatus(selectedTeam.id, status), `Team ${status}.`);
+    return run(
+      () => setTeamStatus(selectedTeam.id, status),
+      `Team ${status.replaceAll("_", " ")}.`,
+    );
   }
 
   function handleScore() {
@@ -215,7 +222,8 @@ export function AdminDashboard({ data }: { data: ReviewData }) {
                 >
                   <span className="block font-medium">{team.teamName}</span>
                   <span className="mt-1 block text-xs text-[#17201d]/55">
-                    {team.trackName ?? "No track"} · {team.status}
+                    {team.trackName ?? "No track"} ·{" "}
+                    {team.status.replaceAll("_", " ")}
                   </span>
                 </button>
               ))}
@@ -252,7 +260,7 @@ export function AdminDashboard({ data }: { data: ReviewData }) {
                       <button
                         type="button"
                         disabled={pending}
-                        onClick={() => handleTeamStatus("approved")}
+                        onClick={() => handleTeamStatus("accepted")}
                         className="border border-[#55705c] px-3 py-2 text-sm text-[#315c38] disabled:opacity-50"
                       >
                         Approve team
