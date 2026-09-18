@@ -139,7 +139,11 @@ export function RegistrationForm({
     [form],
   );
 
+  // The review step is the only one that submits; every other step advances.
+  const reviewing = isReviewStep(step, memberCount);
+
   const next = async () => {
+    if (reviewing) return;
     const valid = await form.trigger(
       fieldsForStep(step, memberCount) as FieldPath<RegistrationValues>[],
       { shouldFocus: true },
@@ -192,12 +196,27 @@ export function RegistrationForm({
     }
   };
 
-  // The review step is the only one that submits; every other step advances.
-  const reviewing = isReviewStep(step, memberCount);
+  const submit = form.handleSubmit(onSubmit);
+
+  /**
+   * One `<form>` backs every step, so a submit event can arrive from a step that
+   * has no business submitting: Enter pressed in any field, or the browser
+   * running a click's activation behaviour after React has already flipped the
+   * Next button's `type` to `submit`. Only the review step submits; anywhere
+   * else the intent is "next".
+   */
+  const handleSubmit = (event: React.FormEvent<HTMLFormElement>) => {
+    if (!reviewing) {
+      event.preventDefault();
+      void next();
+      return;
+    }
+    return submit(event);
+  };
 
   return (
     <Form {...form}>
-      <form onSubmit={form.handleSubmit(onSubmit)} noValidate>
+      <form onSubmit={handleSubmit} noValidate>
         <div className="flex flex-col gap-1 mb-6">
           <h1 className="text-2xl tracking-tighter font-semibold">
             Register your team
@@ -259,15 +278,26 @@ export function RegistrationForm({
                 Back
               </Button>
 
+              {/*
+                Distinct keys, so React swaps the DOM node instead of rewriting
+                `type` on the node whose click is still in flight — otherwise the
+                last Next click lands on a button that has meanwhile become a
+                submit button, and the browser posts the form.
+              */}
               {reviewing ? (
-                <Button type="submit" disabled={submitting}>
+                <Button key="submit" type="submit" disabled={submitting}>
                   {submitting ? (
                     <LoaderCircle aria-hidden className="animate-spin" />
                   ) : null}
                   {submitting ? "Submitting…" : "Submit registration"}
                 </Button>
               ) : (
-                <Button type="button" onClick={next} disabled={submitting}>
+                <Button
+                  key="next"
+                  type="button"
+                  onClick={next}
+                  disabled={submitting}
+                >
                   Next
                   <ArrowRight aria-hidden />
                 </Button>
