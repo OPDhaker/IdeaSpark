@@ -62,6 +62,14 @@ export function Hero({ ctaState }: { ctaState: CtaState }) {
               IdeaSpark 3.0
             </h1>
 
+            {/* States the purpose beside the name, at the top of the page:
+                Google's OAuth review reads the home page for both. */}
+            <p className="mt-3 max-w-[560px] text-base font-medium leading-relaxed text-foreground/80 md:text-lg">
+              The registration and evaluation site for IdeaSpark 3.0, the
+              ideathon run by the Founders Club at SRM Institute of Science and
+              Technology on 5–6 October 2026.
+            </p>
+
             <div className="mt-4 flex flex-wrap items-start gap-4">
               <Link href={cta[ctaState].href} className={solidPill}>
                 {cta[ctaState].label}
