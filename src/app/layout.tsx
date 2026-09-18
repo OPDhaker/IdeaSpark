@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { Inter, Instrument_Serif } from "next/font/google";
+import { Instrument_Serif, Inter } from "next/font/google";
 import "./globals.css";
 
 const interSans = Inter({
@@ -13,11 +13,28 @@ const instrumentSerif = Instrument_Serif({
   subsets: ["latin"],
 });
 
+/**
+ * `applicationName`, `title` and the home page heading must all read
+ * "IdeaSpark 3.0", identical to the Google OAuth consent screen — a mismatch
+ * between the consent screen and the home page fails Google's review.
+ */
 export const metadata: Metadata = {
+  metadataBase: new URL("https://ideaspark.thefoundersclub.tech"),
+  applicationName: "IdeaSpark 3.0",
+  // No `template` here: every page already spells its own "… — IdeaSpark 3.0".
   title: "IdeaSpark 3.0",
-  description: "IdeaSpark—Spark your Idea",
+  description:
+    "IdeaSpark 3.0 is the registration and evaluation site for the IdeaSpark 3.0 ideathon, run by the Founders Club at SRM Institute of Science and Technology. Teams register, submit an idea, and get judged on 5–6 October 2026.",
   icons: {
     icon: "/fc-icons/logo.svg",
+  },
+  openGraph: {
+    type: "website",
+    siteName: "IdeaSpark 3.0",
+    title: "IdeaSpark 3.0",
+    description:
+      "Registration and evaluation for the IdeaSpark 3.0 ideathon by the Founders Club, SRM Institute of Science and Technology.",
+    url: "https://ideaspark.thefoundersclub.tech",
   },
 };
 

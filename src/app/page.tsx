@@ -1,3 +1,4 @@
+import { About } from "@/components/landing/about";
 import { CtaBanner } from "@/components/landing/cta-banner";
 import { FadeInSection } from "@/components/landing/fade-in-section";
 import { Footer } from "@/components/landing/footer";
@@ -15,6 +16,9 @@ export default async function Home() {
       <main>
         <Hero ctaState={ctaState} />
         <FadeInSection>
+          <About />
+        </FadeInSection>
+        <FadeInSection delay={100}>
           <InfoCards />
         </FadeInSection>
         <FadeInSection delay={150}>

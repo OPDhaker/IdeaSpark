@@ -1,4 +1,10 @@
 import Image from "next/image";
+import Link from "next/link";
+
+const legalLinks = [
+  { href: "/privacy-policy", label: "Privacy Policy" },
+  { href: "/tos", label: "Terms of Service" },
+];
 
 export function Footer() {
   return (
@@ -23,6 +29,31 @@ export function Footer() {
           </span>
           <span className="sr-only">Founders Club</span>
         </p>
+      </div>
+
+      {/* Names the app and links the legal pages: Google's OAuth review looks
+          for both on the home page, and students get a way to reach us. */}
+      <div className="mx-auto flex w-full max-w-section flex-col gap-3 border-t border-foreground/15 py-6 text-sm text-foreground/70 md:flex-row md:items-center md:justify-between">
+        <p>
+          IdeaSpark 3.0 — Founders Club, SRM Institute of Science and Technology
+        </p>
+        <div className="flex flex-wrap items-center gap-x-5 gap-y-2">
+          {legalLinks.map((link) => (
+            <Link
+              key={link.href}
+              href={link.href}
+              className="hover:text-foreground"
+            >
+              {link.label}
+            </Link>
+          ))}
+          <a
+            href="mailto:opdhaker2007@gmail.com"
+            className="hover:text-foreground"
+          >
+            Contact
+          </a>
+        </div>
       </div>
     </footer>
   );
