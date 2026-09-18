@@ -37,6 +37,11 @@
   --sidebar-ring: oklch(0.4806 0.0815 140.0625);
   --font-sans: var(--font-inter-sans);
   --font-serif: var(--font-instrument-serif);
+  /* shadcn/typeset (used by /playbook) reads --font-heading and
+     --font-mono. One typeface across the site, so headings are Inter;
+     mono is a system stack and downloads nothing. */
+  --font-heading: var(--font-inter-sans);
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   --radius: 0.35rem;
   --shadow-x: 0px;
   --shadow-y: 1px;
@@ -159,6 +164,8 @@
 
   --font-sans: var(--font-inter-sans);
   --font-serif: var(--font-instrument-serif);
+  --font-heading: var(--font-heading);
+  --font-mono: var(--font-mono);
 
   /* Shared max width for landing/page sections (Figma: 1280 canvas - 2x64 padding) */
   --container-section: 1152px;
