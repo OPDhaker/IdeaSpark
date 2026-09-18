@@ -1,9 +1,11 @@
 "use client";
 
+import { LogOut } from "lucide-react";
 import Image from "next/image";
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import type { CtaState } from "@/lib/auth/cta";
+import { useSignOut } from "@/lib/auth/use-sign-out";
 
 const navLinks = [
   { href: "/", label: "Home" },
@@ -22,6 +24,10 @@ const cta: Record<CtaState, { href: string; label: string }> = {
 
 export function Navbar({ ctaState }: { ctaState: CtaState }) {
   const [open, setOpen] = useState(false);
+  const { signOut, pending } = useSignOut();
+
+  // "no-team" and "has-team" both mean there is a session to end.
+  const signedIn = ctaState !== "signed-out";
 
   useEffect(() => {
     if (!open) return;
@@ -62,6 +68,22 @@ export function Navbar({ ctaState }: { ctaState: CtaState }) {
             >
               {cta[ctaState].label}
             </Link>
+
+            {signedIn ? (
+              // Icon-only, so it needs an explicit name. Hidden on mobile —
+              // the right cluster is already tight there, and the sheet below
+              // carries a labelled row instead.
+              <button
+                type="button"
+                onClick={signOut}
+                disabled={pending}
+                aria-label="Sign out"
+                title="Sign out"
+                className="hidden size-11 items-center justify-center rounded-full text-foreground transition-colors hover:bg-foreground/10 disabled:opacity-60 md:flex"
+              >
+                <LogOut aria-hidden className="size-5" />
+              </button>
+            ) : null}
 
             <button
               type="button"
@@ -112,6 +134,18 @@ export function Navbar({ ctaState }: { ctaState: CtaState }) {
               {link.label}
             </Link>
           ))}
+
+          {signedIn ? (
+            <button
+              type="button"
+              onClick={signOut}
+              disabled={pending}
+              className={`${linkClass} flex items-center gap-2 py-2 text-left disabled:opacity-60`}
+            >
+              <LogOut aria-hidden className="size-5" />
+              {pending ? "Signing out…" : "Sign Out"}
+            </button>
+          ) : null}
         </div>
       </nav>
     </header>

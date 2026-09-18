@@ -1,6 +1,18 @@
 import { and, eq, sql } from "drizzle-orm";
 import { db } from "./index";
-import { members, payments, teams } from "./schema";
+import {
+  evaluationRounds,
+  members,
+  payments,
+  submissions,
+  teams,
+} from "./schema";
+
+export type ReviewStatus =
+  | "pending_submission"
+  | "in_review"
+  | "rejected"
+  | "accepted";
 
 export type RegistrationMember = {
   name: string;
@@ -127,7 +139,7 @@ export async function registerTeamWithMembers(input: {
         teamName: input.teamName,
         trackId: input.trackId,
         leadUserId: input.leaderUserId,
-        status: "pending",
+        status: "pending_submission",
       })
       .returning();
 
@@ -312,5 +324,213 @@ export async function markPaymentPaidByOrderAtomically(input: {
     `);
 
     return updatedPayment;
+  });
+}
+
+/**
+ * Moves a team from `pending_submission` to `in_review` by recording the deck
+ * link for a round. Writes both `submissions.status` and `teams.status` in one
+ * transaction so the two can never disagree.
+ */
+export async function submitIdeaAtomically(input: {
+  teamId: string;
+  roundId: string;
+  title: string | null;
+  description: string | null;
+  driveLink: string;
+}) {
+  return db.transaction(async (tx) => {
+    await tx.execute(
+      sql`SELECT pg_advisory_xact_lock(hashtext(${input.teamId}))`,
+    );
+
+    const [team] = await tx
+      .select({ id: teams.id, status: teams.status })
+      .from(teams)
+      .where(eq(teams.id, input.teamId))
+      .for("update")
+      .limit(1);
+
+    if (!team) throw new Error("Team not found");
+    if (team.status === "in_review")
+      throw new Error("Your idea is already under review");
+    if (team.status === "accepted")
+      throw new Error("Your idea has already been accepted");
+    if (team.status === "rejected")
+      throw new Error("Your idea was rejected and cannot be resubmitted");
+
+    const now = new Date();
+    const values = {
+      title: input.title,
+      description: input.description,
+      driveLink: input.driveLink,
+      status: "in_review" as const,
+      submittedAt: now,
+      updatedAt: now,
+      reviewedBy: null,
+      reviewedAt: null,
+      remarks: null,
+    };
+
+    const [submission] = await tx
+      .insert(submissions)
+      .values({ teamId: input.teamId, roundId: input.roundId, ...values })
+      .onConflictDoUpdate({
+        target: [submissions.teamId, submissions.roundId],
+        set: values,
+      })
+      .returning();
+
+    if (!submission) throw new Error("Failed to save submission");
+
+    await tx
+      .update(teams)
+      .set({ status: "in_review", updatedAt: now })
+      .where(eq(teams.id, input.teamId));
+
+    return submission;
+  });
+}
+
+/**
+ * Records an admin verdict on a submission and mirrors it onto the team.
+ * Only a submission that is `in_review` can be decided, so a verdict cannot be
+ * applied twice or to an unsubmitted round.
+ */
+export async function reviewSubmissionAtomically(input: {
+  submissionId: string;
+  status: "accepted" | "rejected";
+  adminId: string;
+  remarks?: string | null;
+}) {
+  return db.transaction(async (tx) => {
+    // Unlocked read purely to learn the team id: the advisory lock is always
+    // taken before any row lock, in the same order as every other writer here.
+    const [owner] = await tx
+      .select({ teamId: submissions.teamId })
+      .from(submissions)
+      .where(eq(submissions.id, input.submissionId))
+      .limit(1);
+
+    if (!owner) throw new Error("Submission not found");
+
+    await tx.execute(
+      sql`SELECT pg_advisory_xact_lock(hashtext(${owner.teamId}))`,
+    );
+
+    const [existing] = await tx
+      .select({
+        id: submissions.id,
+        teamId: submissions.teamId,
+        status: submissions.status,
+      })
+      .from(submissions)
+      .where(eq(submissions.id, input.submissionId))
+      .for("update")
+      .limit(1);
+
+    if (!existing) throw new Error("Submission not found");
+    if (existing.status !== "in_review")
+      throw new Error("Only a submission under review can be decided");
+
+    const now = new Date();
+
+    const [submission] = await tx
+      .update(submissions)
+      .set({
+        status: input.status,
+        reviewedBy: input.adminId,
+        reviewedAt: now,
+        remarks: input.remarks?.trim() || null,
+        updatedAt: now,
+      })
+      .where(eq(submissions.id, existing.id))
+      .returning();
+
+    const [team] = await tx
+      .update(teams)
+      .set({
+        status: input.status,
+        reviewedBy: input.adminId,
+        reviewedAt: now,
+        updatedAt: now,
+      })
+      .where(eq(teams.id, existing.teamId))
+      .returning();
+
+    if (!submission || !team) throw new Error("Failed to record the review");
+
+    return { submission, team };
+  });
+}
+
+/**
+ * super_admin escape hatch. The normal path is `submitIdeaAtomically` /
+ * `reviewSubmissionAtomically`; this exists to correct a mistake or to reopen a
+ * team, including for the next round. Resetting to `pending_submission` also
+ * clears the active round's submission so the team can actually submit again.
+ */
+export async function overrideTeamStatusAtomically(input: {
+  teamId: string;
+  status: ReviewStatus;
+  adminId: string;
+}) {
+  return db.transaction(async (tx) => {
+    await tx.execute(
+      sql`SELECT pg_advisory_xact_lock(hashtext(${input.teamId}))`,
+    );
+
+    const [existing] = await tx
+      .select({ id: teams.id })
+      .from(teams)
+      .where(eq(teams.id, input.teamId))
+      .for("update")
+      .limit(1);
+
+    if (!existing) throw new Error("Team not found");
+
+    const now = new Date();
+
+    const [team] = await tx
+      .update(teams)
+      .set({
+        status: input.status,
+        reviewedBy: input.adminId,
+        reviewedAt: now,
+        updatedAt: now,
+      })
+      .where(eq(teams.id, input.teamId))
+      .returning();
+
+    if (!team) throw new Error("Failed to update the team");
+
+    if (input.status === "pending_submission") {
+      const [activeRound] = await tx
+        .select({ id: evaluationRounds.id })
+        .from(evaluationRounds)
+        .where(eq(evaluationRounds.isActive, true))
+        .limit(1);
+
+      if (activeRound) {
+        await tx
+          .update(submissions)
+          .set({
+            status: "pending_submission",
+            submittedAt: null,
+            reviewedBy: null,
+            reviewedAt: null,
+            remarks: null,
+            updatedAt: now,
+          })
+          .where(
+            and(
+              eq(submissions.teamId, input.teamId),
+              eq(submissions.roundId, activeRound.id),
+            ),
+          );
+      }
+    }
+
+    return team;
   });
 }

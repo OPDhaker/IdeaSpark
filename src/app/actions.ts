@@ -3,14 +3,17 @@
 import { and, count, eq, inArray, or, sql } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { db } from "@/db";
+import { getLeaderboard } from "@/db/queries";
 import {
   admins,
   announcements,
   attendance,
+  auditLog,
   departments,
   evaluationRounds,
   eventConfig,
   members,
+  payments,
   scores,
   submissions,
   teams,
@@ -19,8 +22,12 @@ import {
 import {
   addMemberAtomically,
   createPaymentRecord,
+  overrideTeamStatusAtomically,
+  type ReviewStatus,
   registerTeamWithMembers,
   removeMemberAtomically,
+  reviewSubmissionAtomically,
+  submitIdeaAtomically,
 } from "@/db/transactions";
 import { auth } from "@/lib/auth/server";
 import { getAdminActor, requireAdminRole } from "@/lib/roles";
@@ -73,6 +80,21 @@ async function assertBefore(
   if (Date.now() > cfg[field].getTime()) throw new Error("Deadline passed");
 }
 
+/**
+ * `YYYY-MM-DD` for "now" in Asia/Kolkata.
+ *
+ * Every `date` column here means a local calendar day, and the server runs in
+ * UTC — comparing those directly would flip the day at 05:30 IST.
+ */
+function todayInIst() {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Kolkata",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(new Date());
+}
+
 async function log(
   actorUserId: string | null,
   action: string,
@@ -80,7 +102,6 @@ async function log(
   targetId: string,
   meta?: unknown,
 ) {
-  const { auditLog } = await import("@/db/schema");
   await db.insert(auditLog).values({
     actorUserId,
     action,
@@ -370,29 +391,8 @@ export async function setTrack(trackId: string) {
   if (!team) throw new Error("Create your team first");
   await assertBefore("registrationDeadline");
 
-  const [activeRound] = await db
-    .select()
-    .from(evaluationRounds)
-    .where(eq(evaluationRounds.isActive, true))
-    .limit(1);
-
-  if (activeRound) {
-    const [submission] = await db
-      .select()
-      .from(submissions)
-      .where(
-        and(
-          eq(submissions.teamId, team.id),
-          eq(submissions.roundId, activeRound.id),
-        ),
-      )
-      .limit(1);
-
-    if (submission && submission.status !== "pending_submission") {
-      throw new Error(
-        "Track cannot be changed after submission review has started",
-      );
-    }
+  if (team.status !== "pending_submission") {
+    throw new Error("Track cannot be changed after your idea is submitted");
   }
 
   const [track] = await db
@@ -437,46 +437,17 @@ export async function submitSubmission(
     throw new Error("At least 2 members are required to submit");
   }
 
-  const [existing] = await db
-    .select()
-    .from(submissions)
-    .where(
-      and(eq(submissions.teamId, team.id), eq(submissions.roundId, roundId)),
-    )
-    .limit(1);
+  if (!driveLink.trim()) throw new Error("A submission link is required");
 
-  if (existing?.status === "in_review" || existing?.status === "accepted") {
-    throw new Error("Submission cannot be resubmitted in its current state");
-  }
-
-  const submissionValues = {
+  // The status transition (submission + team, in one transaction) lives in the
+  // transaction layer; the state guards are there too.
+  const submission = await submitIdeaAtomically({
+    teamId: team.id,
+    roundId,
     title: title.trim() || null,
     description: description.trim() || null,
     driveLink: driveLink.trim(),
-    status: "in_review" as const,
-    submittedAt: new Date(),
-    updatedAt: new Date(),
-    reviewedBy: null,
-    reviewedAt: null,
-    remarks: null,
-  };
-
-  const [submission] = existing
-    ? await db
-        .update(submissions)
-        .set(submissionValues)
-        .where(eq(submissions.id, existing.id))
-        .returning()
-    : await db
-        .insert(submissions)
-        .values({
-          teamId: team.id,
-          roundId,
-          ...submissionValues,
-        })
-        .returning();
-
-  if (!submission) throw new Error("Failed to save submission");
+  });
 
   await log(user.id, "submission.submit", "submission", submission.id, {
     roundId,
@@ -501,19 +472,238 @@ export async function getMyDashboard() {
   return { team, members: teamMembers, submissions: teamSubmissions };
 }
 
+/**
+ * Everything the dashboard needs to render the current lifecycle step:
+ * pending_submission (show the template + upload form), in_review, accepted
+ * (show payment) or rejected (terminal, show remarks).
+ *
+ * One call, because all three cards on the page read from it — the constant
+ * hero and track cards as much as the action card that swaps.
+ */
+export async function getSubmissionState() {
+  const user = await requireLead();
+  const team = await getTeamFor(user.id);
+  if (!team) return null;
+
+  const [[cfg], [activeRound], [track], [{ value: memberCount }]] =
+    await Promise.all([
+      db.select().from(eventConfig).where(eq(eventConfig.id, 1)).limit(1),
+      db
+        .select()
+        .from(evaluationRounds)
+        .where(eq(evaluationRounds.isActive, true))
+        .limit(1),
+      team.trackId
+        ? db
+            .select({ name: tracks.name, description: tracks.description })
+            .from(tracks)
+            .where(eq(tracks.id, team.trackId))
+            .limit(1)
+        : Promise.resolve([]),
+      db
+        .select({ value: count() })
+        .from(members)
+        .where(eq(members.teamId, team.id)),
+    ]);
+
+  const [submission] = activeRound
+    ? await db
+        .select()
+        .from(submissions)
+        .where(
+          and(
+            eq(submissions.teamId, team.id),
+            eq(submissions.roundId, activeRound.id),
+          ),
+        )
+        .limit(1)
+    : [];
+
+  return {
+    teamId: team.id,
+    teamName: team.teamName,
+    teamStatus: team.status,
+    paymentStatus: team.paymentStatus,
+    trackName: track?.name ?? null,
+    trackDescription: track?.description ?? null,
+    memberCount,
+    activeRound: activeRound ?? null,
+    submission: submission ?? null,
+    templateUrl: cfg?.submissionTemplateUrl ?? null,
+    submissionDeadline: cfg?.submissionDeadline ?? null,
+    registrationFee: cfg?.registrationFee ?? null,
+  };
+}
+
+/**
+ * Whether the leaderboard is open yet, plus the date it opens.
+ *
+ * Compared in IST — `day_one` is a calendar day, and against UTC `now()` the
+ * board would appear half a day early.
+ */
+export async function getLeaderboardVisibility() {
+  const [cfg] = await db
+    .select({ dayOne: eventConfig.dayOne })
+    .from(eventConfig)
+    .where(eq(eventConfig.id, 1))
+    .limit(1);
+
+  if (!cfg) return { visible: false, dayOne: null };
+  return { visible: todayInIst() >= cfg.dayOne, dayOne: cfg.dayOne };
+}
+
+/**
+ * The one read the dashboard shell needs: who is signed in, and whether the
+ * leaderboard nav item should exist. Done once in the layout so the three
+ * pages underneath don't each repeat it.
+ */
+export async function getDashboardShell() {
+  const user = await requireLead();
+  const { visible, dayOne } = await getLeaderboardVisibility();
+  return {
+    userName: user.name ?? null,
+    userEmail: user.email ?? null,
+    leaderboardVisible: visible,
+    leaderboardOpensOn: dayOne,
+  };
+}
+
+/**
+ * The roster, with department labels resolved — the UI shows "Computer
+ * Science", not the `CSE01` foreign key.
+ */
+export async function getTeamRoster() {
+  const user = await requireLead();
+  const team = await getTeamFor(user.id);
+  if (!team) return null;
+
+  const [roster, [track]] = await Promise.all([
+    db
+      .select({
+        id: members.id,
+        name: members.name,
+        raNumber: members.raNumber,
+        netId: members.netId,
+        phoneNumber: members.phoneNumber,
+        departmentCode: members.departmentCode,
+        departmentLabel: departments.label,
+        facultyName: members.facultyName,
+        facultyPhone: members.facultyPhone,
+        facultyEmail: members.facultyEmail,
+        isLeader: members.isLeader,
+      })
+      .from(members)
+      .leftJoin(departments, eq(members.departmentCode, departments.code))
+      .where(eq(members.teamId, team.id))
+      .orderBy(sql`${members.isLeader} desc`, members.name),
+    team.trackId
+      ? db
+          .select({ name: tracks.name })
+          .from(tracks)
+          .where(eq(tracks.id, team.trackId))
+          .limit(1)
+      : Promise.resolve([]),
+  ]);
+
+  return {
+    team,
+    trackName: track?.name ?? null,
+    members: roster,
+    rosterLocked: team.paymentStatus === "paid",
+  };
+}
+
+/**
+ * Everything on the printable pass strip. Returns null unless the team has
+ * actually paid, so the route guard and the data fetch cannot disagree.
+ *
+ * One pass per member: `attendance_code` is minted per member on payment and
+ * only the leader has a login, so the leader hands the passes out.
+ */
+export async function getReceipt() {
+  const user = await requireLead();
+  const team = await getTeamFor(user.id);
+  if (!team || team.paymentStatus !== "paid") return null;
+
+  const [[payment], passes, [track]] = await Promise.all([
+    db.select().from(payments).where(eq(payments.teamId, team.id)).limit(1),
+    db
+      .select({
+        id: members.id,
+        name: members.name,
+        raNumber: members.raNumber,
+        isLeader: members.isLeader,
+        attendanceCode: members.attendanceCode,
+      })
+      .from(members)
+      .where(eq(members.teamId, team.id))
+      .orderBy(sql`${members.isLeader} desc`, members.name),
+    team.trackId
+      ? db
+          .select({ name: tracks.name })
+          .from(tracks)
+          .where(eq(tracks.id, team.trackId))
+          .limit(1)
+      : Promise.resolve([]),
+  ]);
+
+  const [cfg] = await db
+    .select({ dayOne: eventConfig.dayOne, dayTwo: eventConfig.dayTwo })
+    .from(eventConfig)
+    .where(eq(eventConfig.id, 1))
+    .limit(1);
+
+  return {
+    team,
+    trackName: track?.name ?? null,
+    payment: payment ?? null,
+    members: passes,
+    dayOne: cfg?.dayOne ?? null,
+    dayTwo: cfg?.dayTwo ?? null,
+  };
+}
+
+/**
+ * The leaderboard, gated on day one. The gate lives here rather than only in
+ * the nav so that guessing the URL hits the same refusal.
+ *
+ * `getLeaderboard()` inner-joins `scores`, so a team nobody has scored yet is
+ * absent from the list rather than ranked last — an empty board is the normal
+ * state until judging starts.
+ */
+export async function getLeaderboardView() {
+  const user = await requireLead();
+  const [team, { visible, dayOne }] = await Promise.all([
+    getTeamFor(user.id),
+    getLeaderboardVisibility(),
+  ]);
+
+  if (!visible) {
+    return {
+      visible: false as const,
+      opensOn: dayOne,
+      rows: [],
+      myTeamId: null,
+    };
+  }
+
+  const rows = await getLeaderboard();
+  return {
+    visible: true as const,
+    opensOn: dayOne,
+    rows,
+    myTeamId: team?.id ?? null,
+  };
+}
+
 export async function createPaymentOrderRecord(razorpayOrderId: string) {
   const user = await requireLead();
   const team = await getTeamFor(user.id);
   if (!team) throw new Error("Create your team first");
 
-  const [submission] = await db
-    .select()
-    .from(submissions)
-    .where(
-      and(eq(submissions.teamId, team.id), eq(submissions.status, "accepted")),
-    )
-    .limit(1);
-  if (!submission) {
+  // `teams.status` mirrors the submission verdict (written in the same
+  // transaction), so the team row already in hand is the gate.
+  if (team.status !== "accepted") {
     throw new Error("Payment is available only after acceptance");
   }
 
@@ -570,6 +760,10 @@ export async function updateEventConfig(input: {
   registrationDeadline: Date;
   submissionDeadline: Date;
   registrationFee: string;
+  submissionTemplateUrl?: string | null;
+  /** `YYYY-MM-DD`. Mirrors the `date` columns, so no timezone is implied. */
+  dayOne?: string;
+  dayTwo?: string;
 }) {
   const admin = await requireAdminRole(["super_admin"]);
   if (input.registrationDeadline > input.submissionDeadline) {
@@ -577,12 +771,22 @@ export async function updateEventConfig(input: {
       "Registration deadline cannot be after submission deadline",
     );
   }
+  if (input.dayOne && input.dayTwo && input.dayOne > input.dayTwo) {
+    throw new Error("Day one cannot be after day two");
+  }
   const [config] = await db
     .update(eventConfig)
     .set({
       registrationDeadline: input.registrationDeadline,
       submissionDeadline: input.submissionDeadline,
       registrationFee: input.registrationFee,
+      ...(input.dayOne === undefined ? {} : { dayOne: input.dayOne }),
+      ...(input.dayTwo === undefined ? {} : { dayTwo: input.dayTwo }),
+      ...(input.submissionTemplateUrl === undefined
+        ? {}
+        : {
+            submissionTemplateUrl: input.submissionTemplateUrl?.trim() || null,
+          }),
       updatedAt: new Date(),
     })
     .where(eq(eventConfig.id, 1))
@@ -664,45 +868,39 @@ export async function reviewSubmission(
   remarks?: string,
 ) {
   const admin = await requireAdminRole(["super_admin"]);
-  const [submission] = await db
-    .update(submissions)
-    .set({
-      status,
-      reviewedBy: admin.id,
-      reviewedAt: new Date(),
-      remarks: remarks?.trim() || null,
-      updatedAt: new Date(),
-    })
-    .where(eq(submissions.id, submissionId))
-    .returning();
-  if (!submission) throw new Error("Submission not found");
+  const { submission, team } = await reviewSubmissionAtomically({
+    submissionId,
+    status,
+    adminId: admin.id,
+    remarks,
+  });
   await log(admin.id, `submission.${status}`, "submission", submissionId, {
+    teamId: team.id,
     remarks,
   });
   revalidatePath("/admin");
   revalidatePath("/dashboard");
+  revalidatePath("/dashboard/leaderboard");
   return submission;
 }
 
-export async function setTeamStatus(
-  teamId: string,
-  status: "pending" | "approved" | "rejected",
-) {
+/**
+ * Manual override. The normal way a team changes state is the team submitting
+ * (`submitSubmission`) and an admin deciding (`reviewSubmission`) — use this
+ * only to correct a mistake or to reopen a team, which also clears the active
+ * round's submission.
+ */
+export async function setTeamStatus(teamId: string, status: ReviewStatus) {
   const admin = await requireAdminRole(["super_admin"]);
-  const [team] = await db
-    .update(teams)
-    .set({
-      status,
-      reviewedBy: admin.id,
-      reviewedAt: new Date(),
-      updatedAt: new Date(),
-    })
-    .where(eq(teams.id, teamId))
-    .returning();
-  if (!team) throw new Error("Team not found");
-  await log(admin.id, `team.${status}`, "team", teamId);
+  const team = await overrideTeamStatusAtomically({
+    teamId,
+    status,
+    adminId: admin.id,
+  });
+  await log(admin.id, "team.status.override", "team", teamId, { status });
   revalidatePath("/admin");
   revalidatePath("/dashboard");
+  revalidatePath("/dashboard/leaderboard");
   return team;
 }
 
@@ -741,7 +939,23 @@ export async function scanAttendance(
   eventDate?: string,
 ) {
   const admin = await requireAdminRole(["volunteer", "super_admin"]);
-  const dateValue = eventDate ?? new Date().toISOString().slice(0, 10);
+
+  // The date is part of a UNIQUE key, so an arbitrary string here would let a
+  // volunteer mint a second "present" row for the same member on a day the
+  // event does not run. Only the two configured days are accepted.
+  const [cfg] = await db
+    .select({ dayOne: eventConfig.dayOne, dayTwo: eventConfig.dayTwo })
+    .from(eventConfig)
+    .where(eq(eventConfig.id, 1))
+    .limit(1);
+  if (!cfg) throw new Error("Event configuration is not initialized");
+
+  const dateValue = eventDate ?? todayInIst();
+  if (dateValue !== cfg.dayOne && dateValue !== cfg.dayTwo) {
+    throw new Error(
+      `Attendance can only be marked on ${cfg.dayOne} or ${cfg.dayTwo}`,
+    );
+  }
 
   const [member] = await db
     .select()
@@ -777,16 +991,6 @@ export async function scanAttendance(
     alreadyPresent: !row,
     attendance: row ?? null,
   };
-}
-
-export async function publishResults(enabled: boolean) {
-  const admin = await requireAdminRole(["super_admin"]);
-  await db
-    .update(eventConfig)
-    .set({ resultsPublished: enabled, updatedAt: new Date() })
-    .where(eq(eventConfig.id, 1));
-  await log(admin.id, "results.publish", "event_config", "1", { enabled });
-  revalidatePath("/dashboard/leaderboard");
 }
 
 export async function getAdminAnnouncements() {
