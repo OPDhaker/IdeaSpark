@@ -799,3 +799,82 @@ export async function getAdminAnnouncements() {
 export async function getCurrentAdmin() {
   return getAdminActor();
 }
+
+export async function getAdminReviewData() {
+  const admin = await requireAdminRole([
+    "super_admin",
+    "evaluator",
+    "volunteer",
+  ]);
+
+  const [teamRows, roundRows, submissionRows, memberRows, scoreRows] =
+    await Promise.all([
+      db
+        .select({
+          id: teams.id,
+          teamName: teams.teamName,
+          trackId: teams.trackId,
+          trackName: tracks.name,
+          status: teams.status,
+          paymentStatus: teams.paymentStatus,
+          createdAt: teams.createdAt,
+        })
+        .from(teams)
+        .leftJoin(tracks, eq(teams.trackId, tracks.id))
+        .orderBy(teams.createdAt),
+      db
+        .select({
+          id: evaluationRounds.id,
+          name: evaluationRounds.name,
+          description: evaluationRounds.description,
+          sequenceNo: evaluationRounds.sequenceNo,
+          isActive: evaluationRounds.isActive,
+        })
+        .from(evaluationRounds)
+        .orderBy(evaluationRounds.sequenceNo),
+      db
+        .select({
+          id: submissions.id,
+          teamId: submissions.teamId,
+          roundId: submissions.roundId,
+          title: submissions.title,
+          description: submissions.description,
+          driveLink: submissions.driveLink,
+          status: submissions.status,
+          remarks: submissions.remarks,
+          submittedAt: submissions.submittedAt,
+        })
+        .from(submissions)
+        .orderBy(submissions.updatedAt),
+      db
+        .select({
+          id: members.id,
+          teamId: members.teamId,
+          name: members.name,
+          raNumber: members.raNumber,
+          netId: members.netId,
+          isLeader: members.isLeader,
+        })
+        .from(members)
+        .orderBy(members.createdAt),
+      db
+        .select({
+          id: scores.id,
+          teamId: scores.teamId,
+          roundId: scores.roundId,
+          evaluatorId: scores.evaluatorId,
+          score: scores.score,
+          remarks: scores.remarks,
+        })
+        .from(scores),
+    ]);
+
+  return {
+    admin: { id: admin.id, name: admin.name, role: admin.role },
+    teams: teamRows,
+    rounds: roundRows,
+    submissions: submissionRows,
+    members: memberRows,
+    scores: scoreRows,
+  };
+}
