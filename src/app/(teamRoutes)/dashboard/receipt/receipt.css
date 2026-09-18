@@ -1,0 +1,68 @@
+/*
+ * The pass strip. Scoped to `.receipt`, and the print rules are gated behind
+ * `body:has(.receipt-page)` — this file is imported by one route, but a CSS
+ * import in the app router is global, so the sidebar must only disappear when
+ * the thing being printed is actually the strip.
+ */
+
+.receipt {
+  --tear: 12px;
+  /* Zigzag torn edge, top and bottom. The two conic gradients cut the teeth;
+     the linear gradient keeps everything between them opaque. */
+  -webkit-mask:
+    conic-gradient(from 135deg at top, #0000, #000 1deg 89deg, #0000 90deg) top
+    / var(--tear) var(--tear) repeat-x,
+    conic-gradient(from -45deg at bottom, #0000, #000 1deg 89deg, #0000 90deg)
+    bottom / var(--tear) var(--tear) repeat-x,
+    linear-gradient(#000 0 0) center / 100% calc(100% - var(--tear) * 2)
+    no-repeat;
+  mask:
+    conic-gradient(from 135deg at top, #0000, #000 1deg 89deg, #0000 90deg) top
+    / var(--tear) var(--tear) repeat-x,
+    conic-gradient(from -45deg at bottom, #0000, #000 1deg 89deg, #0000 90deg)
+    bottom / var(--tear) var(--tear) repeat-x,
+    linear-gradient(#000 0 0) center / 100% calc(100% - var(--tear) * 2)
+    no-repeat;
+}
+
+.receipt-rule {
+  border-top: 1px dashed currentColor;
+  opacity: 0.35;
+}
+
+/*
+ * No `!important` below, and none is needed: Tailwind's utilities live in
+ * `@layer utilities`, and this file is unlayered, so these rules win on cascade
+ * layer alone regardless of specificity.
+ */
+@media print {
+  body:has(.receipt-page) {
+    background: #fff;
+  }
+
+  /* The shell is not part of the pass. */
+  body:has(.receipt-page) [data-slot="sidebar"] {
+    display: none;
+  }
+
+  body:has(.receipt-page) [data-slot="sidebar-inset"] {
+    margin: 0;
+    border-radius: 0;
+    box-shadow: none;
+  }
+
+  .receipt-page {
+    padding: 0;
+  }
+
+  .receipt {
+    margin: 0 auto;
+    box-shadow: none;
+  }
+
+  /* A member's name, RA number and QR must never straddle a page break. */
+  .receipt-pass {
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+}

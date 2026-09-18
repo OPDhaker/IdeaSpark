@@ -11,6 +11,7 @@ import {
   teams,
   tracks,
 } from "./schema";
+import type { ReviewStatus } from "./transactions";
 
 export async function getActiveTracks() {
   return db
@@ -83,7 +84,7 @@ export async function getLeaderboard() {
     .from(scores)
     .innerJoin(teams, eq(scores.teamId, teams.id))
     .leftJoin(tracks, eq(teams.trackId, tracks.id))
-    .where(and(eq(teams.paymentStatus, "paid"), eq(teams.status, "approved")))
+    .where(and(eq(teams.paymentStatus, "paid"), eq(teams.status, "accepted")))
     .groupBy(teams.id, teams.teamName, tracks.name)
     .orderBy(desc(sql`coalesce(avg(${scores.score}), 0)`));
 }
@@ -107,7 +108,7 @@ export async function getActiveRound() {
 }
 
 export async function listAdminTeams(filters?: {
-  status?: "pending" | "approved" | "rejected";
+  status?: ReviewStatus;
   trackId?: string;
   search?: string;
 }) {

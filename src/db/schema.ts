@@ -16,13 +16,18 @@ import {
   varchar,
 } from "drizzle-orm/pg-core";
 
-export const teamStatusEnum = pgEnum("team_status_enum", [
-  "pending",
-  "approved",
-  "rejected",
-]);
-
-export const submissionStatusEnum = pgEnum("submission_status_enum", [
+/**
+ * One review lifecycle, shared by `teams.status` and `submissions.status`.
+ *
+ * `teams.status` is the team's current state and the column every gate reads
+ * (payment, leaderboard, track changes). `submissions.status` is the per-round
+ * record, so ISD-1 and ISD-2 keep separate verdicts. Both are always written in
+ * the same transaction (see `src/db/transactions.ts`), so they cannot drift.
+ *
+ * pending_submission -> in_review -> accepted | rejected. `rejected` is
+ * terminal; only a super_admin override reopens a team.
+ */
+export const reviewStatusEnum = pgEnum("review_status_enum", [
   "pending_submission",
   "in_review",
   "rejected",
@@ -84,7 +89,7 @@ export const teams = pgTable(
      * Members do not have separate Google/Neon Auth identities.
      */
     leadUserId: text("lead_user_id").notNull().unique(),
-    status: teamStatusEnum().notNull().default("pending"),
+    status: reviewStatusEnum().notNull().default("pending_submission"),
     paymentStatus: paymentStatusEnum("payment_status"),
     reviewedBy: uuid("reviewed_by").references(() => admins.id, {
       onDelete: "set null",
@@ -145,7 +150,6 @@ export const evaluationRounds = pgTable(
     description: text(),
     sequenceNo: integer("sequence_no").notNull().unique(),
     isActive: boolean("is_active").notNull().default(false),
-    resultsPublished: boolean("results_published").notNull().default(false),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
       .defaultNow(),
@@ -170,7 +174,7 @@ export const submissions = pgTable(
     title: varchar({ length: 255 }),
     description: text(),
     driveLink: text("drive_link"),
-    status: submissionStatusEnum().notNull().default("pending_submission"),
+    status: reviewStatusEnum().notNull().default("pending_submission"),
     submittedAt: timestamp("submitted_at", { withTimezone: true }),
     reviewedBy: uuid("reviewed_by").references(() => admins.id, {
       onDelete: "set null",
@@ -296,7 +300,16 @@ export const eventConfig = pgTable(
       precision: 10,
       scale: 2,
     }).notNull(),
-    resultsPublished: boolean("results_published").notNull().default(false),
+    /** Deck template the team downloads before submitting. Null hides the link. */
+    submissionTemplateUrl: text("submission_template_url"),
+    /**
+     * The two event days. `date`, not `timestamptz`, so they compare directly
+     * against `attendance.event_date` — and so the leaderboard gate is a plain
+     * calendar comparison. Read them in IST: a `date` against UTC `now()` would
+     * flip at 05:30 local.
+     */
+    dayOne: date("day_one").notNull(),
+    dayTwo: date("day_two").notNull(),
     updatedAt: timestamp("updated_at", { withTimezone: true })
       .notNull()
       .defaultNow(),
@@ -308,6 +321,11 @@ export const eventConfig = pgTable(
       sql`${t.registrationDeadline} <= ${t.submissionDeadline}`,
     ),
     check("event_config_fee_nonnegative", sql`${t.registrationFee} >= 0`),
+    check("event_config_day_order", sql`${t.dayOne} <= ${t.dayTwo}`),
+    check(
+      "event_config_submission_before_day_one",
+      sql`${t.submissionDeadline} <= ${t.dayOne}`,
+    ),
   ],
 );
 
