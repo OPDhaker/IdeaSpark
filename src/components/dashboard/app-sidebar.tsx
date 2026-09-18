@@ -3,8 +3,7 @@
 import { LayoutDashboard, LogOut, Trophy, Users } from "lucide-react";
 import Image from "next/image";
 import Link from "next/link";
-import { usePathname, useRouter } from "next/navigation";
-import { useState } from "react";
+import { usePathname } from "next/navigation";
 import {
   Sidebar,
   SidebarContent,
@@ -16,7 +15,7 @@ import {
   SidebarMenuButton,
   SidebarMenuItem,
 } from "@/components/ui/sidebar";
-import { authClient } from "@/lib/auth/client";
+import { useSignOut } from "@/lib/auth/use-sign-out";
 
 type NavItem = {
   href: string;
@@ -49,23 +48,9 @@ export function AppSidebar({
   leaderboardVisible: boolean;
 }) {
   const pathname = usePathname();
-  const router = useRouter();
-  const [signingOut, setSigningOut] = useState(false);
+  const { signOut, pending } = useSignOut();
 
   const items = leaderboardVisible ? [...BASE_NAV, LEADERBOARD] : BASE_NAV;
-
-  async function handleSignOut() {
-    setSigningOut(true);
-    try {
-      await authClient.signOut();
-      router.push("/");
-      // The landing page reads the session cookie server-side, so the cached
-      // RSC payload has to be dropped too or the navbar still says "Dashboard".
-      router.refresh();
-    } catch {
-      setSigningOut(false);
-    }
-  }
 
   return (
     <Sidebar variant="inset">
@@ -128,9 +113,9 @@ export function AppSidebar({
         </div>
         <SidebarMenu>
           <SidebarMenuItem>
-            <SidebarMenuButton onClick={handleSignOut} disabled={signingOut}>
+            <SidebarMenuButton onClick={signOut} disabled={pending}>
               <LogOut aria-hidden />
-              <span>{signingOut ? "Signing out…" : "Sign Out"}</span>
+              <span>{pending ? "Signing out…" : "Sign Out"}</span>
             </SidebarMenuButton>
           </SidebarMenuItem>
         </SidebarMenu>
