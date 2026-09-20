@@ -31,7 +31,7 @@ export function PanelsAdmin({ data }: { data: PanelAdminData }) {
   function selectRound(next: string) {
     const params = new URLSearchParams(searchParams.toString());
     params.set("round", next);
-    router.push(`/admin?${params.toString()}`);
+    router.push(`/admin/panels?${params.toString()}`);
   }
 
   async function run(action: () => Promise<unknown>, message: string) {

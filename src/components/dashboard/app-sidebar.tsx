@@ -1,6 +1,6 @@
 "use client";
 
-import { LayoutDashboard, LogOut, Trophy, Users } from "lucide-react";
+import { LayoutDashboard, Lock, LogOut, Trophy, Users } from "lucide-react";
 import Image from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
@@ -42,15 +42,14 @@ export function AppSidebar({
   userName: string | null;
   userEmail: string | null;
   /**
-   * Hiding the item is decoration only — the route itself re-checks the date,
-   * so guessing the URL hits the same refusal.
+   * `event_config.leaderboard_published`. Only controls whether the item is
+   * reachable — the route re-checks it, so guessing the URL hits the same
+   * refusal.
    */
   leaderboardVisible: boolean;
 }) {
   const pathname = usePathname();
   const { signOut, pending } = useSignOut();
-
-  const items = leaderboardVisible ? [...BASE_NAV, LEADERBOARD] : BASE_NAV;
 
   return (
     <Sidebar variant="inset">
@@ -76,7 +75,7 @@ export function AppSidebar({
         <SidebarGroup>
           <SidebarGroupContent>
             <SidebarMenu>
-              {items.map((item) => (
+              {BASE_NAV.map((item) => (
                 <SidebarMenuItem key={item.href}>
                   <SidebarMenuButton
                     asChild
@@ -95,6 +94,35 @@ export function AppSidebar({
                   </SidebarMenuButton>
                 </SidebarMenuItem>
               ))}
+
+              {/*
+                The item is always in the nav — teams should know the board
+                exists — but it stays a dead, locked row until a super admin
+                publishes it, rather than linking to a page that can only
+                refuse them. No date is shown because there is no date to
+                promise: publishing happens when judging is done.
+              */}
+              <SidebarMenuItem>
+                {leaderboardVisible ? (
+                  <SidebarMenuButton
+                    asChild
+                    isActive={pathname.startsWith(LEADERBOARD.href)}
+                  >
+                    <Link href={LEADERBOARD.href}>
+                      <LEADERBOARD.icon aria-hidden />
+                      <span>{LEADERBOARD.label}</span>
+                    </Link>
+                  </SidebarMenuButton>
+                ) : (
+                  <SidebarMenuButton disabled>
+                    <LEADERBOARD.icon aria-hidden />
+                    <span>{LEADERBOARD.label}</span>
+                    <Lock aria-hidden className="ml-auto size-3.5" />
+                    {/* A bare icon is not a reason; name the state. */}
+                    <span className="sr-only">Locked</span>
+                  </SidebarMenuButton>
+                )}
+              </SidebarMenuItem>
             </SidebarMenu>
           </SidebarGroupContent>
         </SidebarGroup>

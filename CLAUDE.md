@@ -60,7 +60,7 @@ Groups map to audiences, and to the `proxy.ts` matcher:
 | `(publicRoutes)`, gated | `/register` | signed-in, teamless (redirects to `/dashboard` once a team exists) |
 | `(teamRoutes)` | `/dashboard`, `/dashboard/team-details`, `/dashboard/leaderboard` | signed-in team leader |
 | `(panelRoutes)` | `/panel`, `/panel/[round]`, `/panel/[round]/leaderboard` | evaluators |
-| `(adminRoutes)` | `/admin` | admins |
+| `(adminRoutes)` | `/admin`, `/admin/panels`, `/admin/event` | admins (the two sub-routes are `super_admin` only) |
 
 `/` is the landing page, composed from `src/components/landing/*`. It is **dynamic**, not static: `getCtaState()` (`src/lib/auth/cta.ts`) picks the primary CTA per visitor — `Log In` / `Register` / `Dashboard` — and `page.tsx` passes one `ctaState` down to `Navbar`, `Hero` and `CtaBanner`. It first checks for a `NEON_AUTH_COOKIE_PREFIX` cookie and returns early, because `auth.getSession()` costs a ~300ms upstream round trip **even when nobody is signed in**; skipping it keeps anonymous TTFB at ~17ms. Don't replace that check with a bare `getSession()`.
 
@@ -95,6 +95,7 @@ Four distinct layers; keep them separate:
 - Payment is gated on an `accepted` submission; amount always comes from `event_config.registrationFee`, never the client.
 - `event_config` is a singleton (`id = 1`, enforced by check constraint); at most one active `evaluation_rounds` row (partial unique index).
 - Leaderboard counts only teams that are both `approved` and `paid`.
+- **The team leaderboard is published, not scheduled.** `event_config.leaderboard_published` is a switch a super admin flips at `/admin/event`; no date is involved. Scores arrive one judge at a time while a round runs, so a date-driven unlock would show a half-judged board, and when judging is *finished* is a call made in the room. `/panel/[round]/leaderboard` is deliberately **not** gated by it — judges need theirs live. That is the only reason the two boards differ.
 - Attendance is one row per `(member_id, event_date)`; scores one row per `(team, round, evaluator)` and upsert on conflict.
 - **Scoring is a four-criterion rubric out of 50** — Problem Understanding /15, Idea Feasibility /10, Decision Making /15, Coordination /10, each with its own `check`. `scores.score` is `GENERATED ALWAYS` as their sum, so it can never be written directly and can never disagree with its parts. `SCORE_CRITERIA` / `SCORE_MAX` in `src/db/schema.ts` are the single source for labels and maxima — derive UI from them, don't retype the numbers.
 - **A judge sits on exactly one panel** (`panel_members.admin_id` is unique), and **a team has exactly one panel per round** (`team_panel_assignments` unique on `(team_id, round_id)`). A team's score is its panel's *per-criterion* mean, summed.
@@ -119,6 +120,13 @@ The only place a score is written. `/admin` has no scoring form — one code pat
 - A `super_admin` gets a panel switcher (`?panel=<id>` or `?panel=all`); `getPanelQueue({ panelId: null })` is the unscoped view and left-joins the assignment, so it lists unassigned teams too.
 - Prev/next walk the queue **A–Z and skip nothing**, so a judge's position never moves under their hand as they save. "Next unscored" is a separate, deliberate jump. The `<ScoreSheet>` is keyed on team id so one team's draft can't leak onto the next.
 - Peer scores are always visible, by design — the panel deliberates together.
+
+### Admin (`/admin`)
+A sidebar shell in `admin/layout.tsx`, matching `/dashboard` and `/panel`. The layout resolves the actor with `getAdminActor()` and filters the nav by role, but **hiding a row is presentation only** — every page re-runs `requireAdminRole`, so typing the URL hits the same refusal.
+
+- `/admin` — the control room: teams, review, attendance, announcements. Still one ~475-line client component; splitting it is a backlog item.
+- `/admin/panels` — panel CRUD, judge rosters, per-round team assignment. `super_admin`.
+- `/admin/event` — the leaderboard publish switch. `super_admin`.
 
 ### Playbook (`/playbook`)
 A self-contained mini-site: its own theme (`playbook-theme.tsx`), `typeset.css`, sidebar/TOC/toolbar in `_components/`, and text mirrors in `_content/` served as plaintext at `/playbook/playbook.md` and `/playbook/llms.txt`. Editing event details means updating **both** `_components/article.tsx` and `_content/playbook.md`. See its own `README.md`.

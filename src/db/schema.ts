@@ -434,6 +434,18 @@ export const eventConfig = pgTable(
     /** Deck template the team downloads before submitting. Null hides the link. */
     submissionTemplateUrl: text("submission_template_url"),
     /**
+     * Whether teams can see `/dashboard/leaderboard`.
+     *
+     * A switch, not a date. Scores arrive one judge at a time while a round
+     * runs, so any schedule-driven unlock shows a half-judged board; whether
+     * judging is *finished* is a call a super admin makes in the room, through
+     * `/admin/event`. `day_one` keeps all its other jobs — it just no longer
+     * has this one.
+     */
+    leaderboardPublished: boolean("leaderboard_published")
+      .notNull()
+      .default(false),
+    /**
      * The two event days. `date`, not `timestamptz`, so they compare directly
      * against `attendance.event_date` — and so the leaderboard gate is a plain
      * calendar comparison. Read them in IST: a `date` against UTC `now()` would

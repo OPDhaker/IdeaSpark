@@ -525,15 +525,22 @@ export async function getSubmissionState() {
  * Compared in IST — `day_one` is a calendar day, and against UTC `now()` the
  * board would appear half a day early.
  */
+/**
+ * Whether teams may see the leaderboard.
+ *
+ * A super admin publishes it; no date is involved. Scores arrive one judge at a
+ * time while a round runs, so unlocking on `day_one` would show a half-judged
+ * board. `/panel`'s leaderboard is deliberately not gated by this — judges need
+ * theirs live, during the round it describes.
+ */
 export async function getLeaderboardVisibility() {
   const [cfg] = await db
-    .select({ dayOne: eventConfig.dayOne })
+    .select({ published: eventConfig.leaderboardPublished })
     .from(eventConfig)
     .where(eq(eventConfig.id, 1))
     .limit(1);
 
-  if (!cfg) return { visible: false, dayOne: null };
-  return { visible: todayInIst() >= cfg.dayOne, dayOne: cfg.dayOne };
+  return { visible: cfg?.published ?? false };
 }
 
 /**
@@ -543,12 +550,11 @@ export async function getLeaderboardVisibility() {
  */
 export async function getDashboardShell() {
   const user = await requireLead();
-  const { visible, dayOne } = await getLeaderboardVisibility();
+  const { visible } = await getLeaderboardVisibility();
   return {
     userName: user.name ?? null,
     userEmail: user.email ?? null,
     leaderboardVisible: visible,
-    leaderboardOpensOn: dayOne,
   };
 }
 
@@ -648,8 +654,8 @@ export async function getReceipt() {
 }
 
 /**
- * The leaderboard, gated on day one. The gate lives here rather than only in
- * the nav so that guessing the URL hits the same refusal.
+ * The leaderboard, gated on the publish switch. The gate lives here rather than
+ * only in the nav so that guessing the URL hits the same refusal.
  *
  * `getLeaderboard()` inner-joins `scores`, so a team nobody has scored yet is
  * absent from the list rather than ranked last — an empty board is the normal
@@ -657,24 +663,18 @@ export async function getReceipt() {
  */
 export async function getLeaderboardView() {
   const user = await requireLead();
-  const [team, { visible, dayOne }] = await Promise.all([
+  const [team, { visible }] = await Promise.all([
     getTeamFor(user.id),
     getLeaderboardVisibility(),
   ]);
 
   if (!visible) {
-    return {
-      visible: false as const,
-      opensOn: dayOne,
-      rows: [],
-      myTeamId: null,
-    };
+    return { visible: false as const, rows: [], myTeamId: null };
   }
 
   const rows = await getLeaderboard();
   return {
     visible: true as const,
-    opensOn: dayOne,
     rows,
     myTeamId: team?.id ?? null,
   };
@@ -779,6 +779,44 @@ export async function updateEventConfig(input: {
   await log(admin.id, "config.update", "event_config", "1");
   revalidatePath("/admin");
   return config;
+}
+
+/**
+ * Publish or hide the team leaderboard.
+ *
+ * Outward-facing to every team at once, so it goes in the audit trail.
+ */
+export async function setLeaderboardPublished(published: boolean) {
+  const admin = await requireAdminRole(["super_admin"]);
+
+  const [config] = await db
+    .update(eventConfig)
+    .set({ leaderboardPublished: published, updatedAt: new Date() })
+    .where(eq(eventConfig.id, 1))
+    .returning();
+  if (!config) throw new Error("Event configuration is not initialized");
+
+  await log(admin.id, "leaderboard.publish", "event_config", "1", {
+    published,
+  });
+  revalidatePath("/admin/event");
+  revalidatePath("/dashboard", "layout");
+  revalidatePath("/dashboard/leaderboard");
+  return { published: config.leaderboardPublished };
+}
+
+export async function getEventControls() {
+  await requireAdminRole(["super_admin"]);
+  const [cfg] = await db
+    .select({
+      leaderboardPublished: eventConfig.leaderboardPublished,
+      dayOne: eventConfig.dayOne,
+      dayTwo: eventConfig.dayTwo,
+    })
+    .from(eventConfig)
+    .where(eq(eventConfig.id, 1))
+    .limit(1);
+  return cfg ?? null;
 }
 
 export async function createEvaluationRound(input: {

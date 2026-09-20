@@ -11,13 +11,6 @@ export const metadata = {
   title: "Leaderboard — IdeaSpark 3.0",
 };
 
-function formatDay(day: string) {
-  return new Intl.DateTimeFormat("en-IN", {
-    dateStyle: "full",
-    timeZone: "Asia/Kolkata",
-  }).format(new Date(`${day}T00:00:00+05:30`));
-}
-
 /** Ties share a rank: 1, 2, 2, 4. */
 function withRanks(rows: { averageScore: string }[]) {
   let rank = 0;
@@ -35,7 +28,7 @@ function withRanks(rows: { averageScore: string }[]) {
 export default async function LeaderBoardPage() {
   const view = await getLeaderboardView();
 
-  // The gate is enforced here, not only by hiding the nav item — guessing the
+  // The gate is enforced here, not only by locking the nav item — guessing the
   // URL has to hit the same refusal.
   if (!view.visible) {
     return (
@@ -48,11 +41,7 @@ export default async function LeaderBoardPage() {
             />
             <div className="mt-5">
               <CardTitle>Scores aren&apos;t out yet</CardTitle>
-              <CardBody>
-                {view.opensOn
-                  ? `The leaderboard opens on ${formatDay(view.opensOn)}.`
-                  : "The leaderboard opens once the event starts."}
-              </CardBody>
+              <CardBody>Scores go up once judging is finished.</CardBody>
             </div>
           </DashCard>
         </div>
