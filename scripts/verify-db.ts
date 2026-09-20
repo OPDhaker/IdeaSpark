@@ -16,6 +16,9 @@ const expected = [
   "event_config",
   "announcements",
   "audit_log",
+  "panels",
+  "panel_members",
+  "team_panel_assignments",
 ];
 
 const rows = await db.execute(sql`

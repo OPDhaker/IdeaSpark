@@ -1,6 +1,7 @@
 import { Trophy } from "lucide-react";
 import { getLeaderboardView } from "@/app/actions";
 import { Badge } from "@/components/ui/badge";
+import { SCORE_MAX } from "@/db/schema";
 import { cn } from "@/lib/utils";
 import { CardBody, CardTitle, DashCard } from "../_components/panel";
 
@@ -69,7 +70,7 @@ export default async function LeaderBoardPage() {
             Leaderboard
           </h1>
           <p className="mt-3 text-muted-foreground text-sm">
-            Ranked by average score across every judge.
+            Ranked by each team&apos;s panel average, out of {SCORE_MAX}.
           </p>
         </header>
 
@@ -102,7 +103,7 @@ export default async function LeaderBoardPage() {
                     Track
                   </th>
                   <th scope="col" className="px-6 py-4 text-right font-normal">
-                    Score
+                    Score / {SCORE_MAX}
                   </th>
                 </tr>
               </thead>
@@ -148,7 +149,8 @@ export default async function LeaderBoardPage() {
 
         <p className="text-muted-foreground text-xs">
           Only teams that have been accepted, paid, and scored by at least one
-          judge appear here.
+          judge appear here. A team&apos;s score is its judging panel&apos;s
+          average, taken per criterion, out of {SCORE_MAX}.
         </p>
       </div>
     </div>

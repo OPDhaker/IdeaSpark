@@ -2,12 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { useMemo, useState } from "react";
-import {
-  reviewSubmission,
-  scanAttendance,
-  setTeamStatus,
-  upsertScore,
-} from "@/app/actions";
+import { reviewSubmission, scanAttendance, setTeamStatus } from "@/app/actions";
 
 type ReviewData = {
   admin: {
@@ -54,7 +49,7 @@ type ReviewData = {
     teamId: string;
     roundId: string;
     evaluatorId: string;
-    score: string;
+    score: string | null;
     remarks: string | null;
   }>;
 };
@@ -66,7 +61,6 @@ export function AdminDashboard({ data }: { data: ReviewData }) {
     data.rounds.find((round) => round.isActive)?.id ?? data.rounds[0]?.id ?? "",
   );
   const [query, setQuery] = useState("");
-  const [score, setScore] = useState("");
   const [remarks, setRemarks] = useState("");
   const [attendanceCode, setAttendanceCode] = useState("");
   const [notice, setNotice] = useState("");
@@ -74,19 +68,10 @@ export function AdminDashboard({ data }: { data: ReviewData }) {
   const [pending, setPending] = useState(false);
 
   const selectedTeam = data.teams.find((team) => team.id === selectedTeamId);
-  const selectedRound = data.rounds.find(
-    (round) => round.id === selectedRoundId,
-  );
   const selectedSubmission = data.submissions.find(
     (submission) =>
       submission.teamId === selectedTeamId &&
       submission.roundId === selectedRoundId,
-  );
-  const existingScore = data.scores.find(
-    (row) =>
-      row.teamId === selectedTeamId &&
-      row.roundId === selectedRoundId &&
-      row.evaluatorId === data.admin.id,
   );
   const selectedMembers = data.members.filter(
     (member) => member.teamId === selectedTeamId,
@@ -143,19 +128,6 @@ export function AdminDashboard({ data }: { data: ReviewData }) {
     );
   }
 
-  function handleScore() {
-    if (!selectedTeam || !selectedRound) return;
-    const value = Number(score);
-    if (!Number.isFinite(value) || value < 0 || value > 100) {
-      setError("Enter a score from 0 to 100.");
-      return;
-    }
-    return run(
-      () => upsertScore(selectedRound.id, selectedTeam.id, value, remarks),
-      "Score saved.",
-    );
-  }
-
   function handleAttendance() {
     if (!attendanceCode.trim()) {
       setError("Enter an attendance code.");
@@ -168,8 +140,6 @@ export function AdminDashboard({ data }: { data: ReviewData }) {
   }
 
   const canReview = data.admin.role === "super_admin";
-  const canScore =
-    data.admin.role === "super_admin" || data.admin.role === "evaluator";
   const canScan =
     data.admin.role === "super_admin" || data.admin.role === "volunteer";
 
@@ -400,42 +370,6 @@ export function AdminDashboard({ data }: { data: ReviewData }) {
                   </div>
 
                   <div className="space-y-6">
-                    {canScore && (
-                      <section className="border border-[#17201d]/15 bg-[#e8f0e6] p-5">
-                        <h3 className="text-lg font-semibold">
-                          Score this team
-                        </h3>
-                        <p className="mt-1 text-sm text-[#17201d]/60">
-                          {selectedRound?.name ?? "Select a round"}
-                        </p>
-                        <label className="mt-5 block text-sm font-medium">
-                          Score / 100
-                          <input
-                            type="number"
-                            min="0"
-                            max="100"
-                            value={score || existingScore?.score || ""}
-                            onChange={(event) => setScore(event.target.value)}
-                            className="mt-2 w-full border border-[#17201d]/20 bg-white px-3 py-2"
-                          />
-                        </label>
-                        <textarea
-                          value={remarks}
-                          onChange={(event) => setRemarks(event.target.value)}
-                          placeholder="Scoring remarks"
-                          rows={4}
-                          className="mt-4 w-full border border-[#17201d]/20 bg-white px-3 py-2 text-sm"
-                        />
-                        <button
-                          type="button"
-                          disabled={pending || !selectedRound}
-                          onClick={handleScore}
-                          className="mt-4 w-full bg-[#17201d] px-4 py-3 text-sm text-white disabled:opacity-50"
-                        >
-                          Save score
-                        </button>
-                      </section>
-                    )}
                     {canScan && (
                       <section className="border border-[#17201d]/15 bg-white p-5">
                         <h3 className="text-lg font-semibold">Attendance</h3>

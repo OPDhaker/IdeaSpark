@@ -3,8 +3,12 @@ import { db } from "./index";
 import {
   evaluationRounds,
   members,
+  panelMembers,
+  panels,
   payments,
+  scores,
   submissions,
+  teamPanelAssignments,
   teams,
 } from "./schema";
 
@@ -532,5 +536,212 @@ export async function overrideTeamStatusAtomically(input: {
     }
 
     return team;
+  });
+}
+
+export type ScoreCriteria = {
+  problemUnderstanding: number;
+  ideaFeasibility: number;
+  decisionMaking: number;
+  coordination: number;
+};
+
+/**
+ * Write one judge's scores for one team in one round.
+ *
+ * Every gate is re-checked here, inside the transaction, rather than trusted
+ * from the page that rendered the form: a judge can keep a sheet open across a
+ * reassignment, a second tab, or a round switch, and none of those may result
+ * in a score the panel no longer owns. The advisory lock is on the team, so two
+ * judges of the same panel scoring the same team serialize against each other
+ * the way the roster and payment writes already do.
+ *
+ * `scores.score` is a generated column — the four criteria are written and the
+ * total falls out of them.
+ */
+export async function upsertPanelScoreAtomically(input: {
+  roundId: string;
+  teamId: string;
+  evaluatorId: string;
+  criteria: ScoreCriteria;
+  remarks?: string | null;
+}) {
+  return db.transaction(async (tx) => {
+    await tx.execute(
+      sql`SELECT pg_advisory_xact_lock(hashtext(${input.teamId}))`,
+    );
+
+    const [round] = await tx
+      .select({
+        id: evaluationRounds.id,
+        eventDate: evaluationRounds.eventDate,
+      })
+      .from(evaluationRounds)
+      .where(eq(evaluationRounds.id, input.roundId))
+      .limit(1);
+
+    if (!round) throw new Error("Evaluation round not found");
+
+    const [panelMember] = await tx
+      .select({ panelId: panelMembers.panelId })
+      .from(panelMembers)
+      .where(eq(panelMembers.adminId, input.evaluatorId))
+      .limit(1);
+
+    if (!panelMember)
+      throw new Error(
+        "You are not on a judging panel. Ask an admin to add you.",
+      );
+
+    const [assignment] = await tx
+      .select({ panelId: teamPanelAssignments.panelId })
+      .from(teamPanelAssignments)
+      .where(
+        and(
+          eq(teamPanelAssignments.teamId, input.teamId),
+          eq(teamPanelAssignments.roundId, input.roundId),
+        ),
+      )
+      .limit(1);
+
+    if (!assignment || assignment.panelId !== panelMember.panelId)
+      throw new Error("This team is not assigned to your panel for this round");
+
+    const [team] = await tx
+      .select({ status: teams.status, paymentStatus: teams.paymentStatus })
+      .from(teams)
+      .where(eq(teams.id, input.teamId))
+      .limit(1);
+
+    if (!team) throw new Error("Team not found");
+    if (team.status !== "accepted")
+      throw new Error("Only accepted teams can be scored");
+    if (team.paymentStatus !== "paid")
+      throw new Error("Only teams that have paid can be scored");
+
+    // Judging happens in the room. A team nobody scanned on this round's day
+    // did not turn up for it, and a score against it would be invented.
+    const { rows: present } = await tx.execute<{ present: boolean }>(sql`
+      SELECT EXISTS (
+        SELECT 1
+        FROM attendance a
+        JOIN members m ON m.id = a.member_id
+        WHERE m.team_id = ${input.teamId}
+          AND a.event_date = ${round.eventDate}
+      ) AS present
+    `);
+
+    if (!present[0]?.present)
+      throw new Error("This team has not been marked present for this round");
+
+    const values = {
+      problemUnderstanding: input.criteria.problemUnderstanding.toFixed(2),
+      ideaFeasibility: input.criteria.ideaFeasibility.toFixed(2),
+      decisionMaking: input.criteria.decisionMaking.toFixed(2),
+      coordination: input.criteria.coordination.toFixed(2),
+      remarks: input.remarks?.trim() || null,
+    };
+
+    const [row] = await tx
+      .insert(scores)
+      .values({
+        teamId: input.teamId,
+        roundId: input.roundId,
+        evaluatorId: input.evaluatorId,
+        ...values,
+      })
+      .onConflictDoUpdate({
+        target: [scores.teamId, scores.roundId, scores.evaluatorId],
+        set: values,
+      })
+      .returning();
+
+    if (!row) throw new Error("Failed to save score");
+    return row;
+  });
+}
+
+/**
+ * Point a set of teams at one panel for one round, replacing whatever panel
+ * they were on. `unique(team_id, round_id)` means a team has exactly one panel
+ * per round, so the conflict clause is the reassignment.
+ */
+export async function assignTeamsToPanelAtomically(input: {
+  teamIds: string[];
+  roundId: string;
+  panelId: string;
+  adminId: string;
+}) {
+  if (input.teamIds.length === 0) return [];
+
+  return db.transaction(async (tx) => {
+    const [panel] = await tx
+      .select({ id: panels.id })
+      .from(panels)
+      .where(eq(panels.id, input.panelId))
+      .limit(1);
+
+    if (!panel) throw new Error("Panel not found");
+
+    const [round] = await tx
+      .select({ id: evaluationRounds.id })
+      .from(evaluationRounds)
+      .where(eq(evaluationRounds.id, input.roundId))
+      .limit(1);
+
+    if (!round) throw new Error("Evaluation round not found");
+
+    return tx
+      .insert(teamPanelAssignments)
+      .values(
+        input.teamIds.map((teamId) => ({
+          teamId,
+          roundId: input.roundId,
+          panelId: input.panelId,
+          assignedBy: input.adminId,
+        })),
+      )
+      .onConflictDoUpdate({
+        target: [teamPanelAssignments.teamId, teamPanelAssignments.roundId],
+        set: {
+          panelId: input.panelId,
+          assignedBy: input.adminId,
+          assignedAt: new Date(),
+        },
+      })
+      .returning();
+  });
+}
+
+/**
+ * Replace a panel's roster in one shot. Delete-then-insert rather than a diff:
+ * `unique(admin_id)` means adding a judge who is on another panel has to fail
+ * loudly, and a partial apply would leave the panel half-staffed mid-round.
+ */
+export async function setPanelJudgesAtomically(input: {
+  panelId: string;
+  adminIds: string[];
+}) {
+  return db.transaction(async (tx) => {
+    const [panel] = await tx
+      .select({ id: panels.id })
+      .from(panels)
+      .where(eq(panels.id, input.panelId))
+      .limit(1);
+
+    if (!panel) throw new Error("Panel not found");
+
+    await tx
+      .delete(panelMembers)
+      .where(eq(panelMembers.panelId, input.panelId));
+
+    if (input.adminIds.length === 0) return [];
+
+    return tx
+      .insert(panelMembers)
+      .values(
+        input.adminIds.map((adminId) => ({ panelId: input.panelId, adminId })),
+      )
+      .returning();
   });
 }

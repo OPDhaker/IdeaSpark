@@ -35,7 +35,7 @@ No test framework is installed. `bun run db:verify` (and `scripts/verify-db.sql`
 
 Read `node_modules/next/dist/docs/` before writing route code — this version differs from older Next.
 
-- **`proxy.ts` replaces `middleware.ts`, and it lives at `src/proxy.ts`.** It must sit at the same level as `app` — because this repo uses `src/app`, a `proxy.ts` at the repo root is silently ignored and nothing is guarded. It calls `auth.middleware({ loginUrl: "/login" })` and guards `/register`, `/account`, `/dashboard`, `/panel`, `/admin`. Route protection is configured there, not per-page.
+- **`proxy.ts` replaces `middleware.ts`, and it lives at `src/proxy.ts`.** It must sit at the same level as `app` — because this repo uses `src/app`, a `proxy.ts` at the repo root is silently ignored and nothing is guarded. It calls `auth.middleware({ loginUrl: "/login" })` and guards `/register`, `/account`, `/dashboard`, `/panel`, `/admin`. It proves only that a visitor is *signed in* — it has no concept of roles, so `/panel` and `/admin` each carry a server-side `requireAdminRole` / `isAdmin` check in their own `layout.tsx`.
 - Layout/page prop types come from **globally generated types** (`LayoutProps<"/">`, `LayoutProps<"/playbook">`) — do not hand-write `{ children }: { children: React.ReactNode }`.
 - `pageExtensions` includes `mdx`, so a `page.mdx` is a real route file. Tailwind v4 (CSS-first, `@import "tailwindcss"` + `@theme inline` in `src/app/globals.css`) — there is no `tailwind.config.ts`.
 
@@ -59,7 +59,7 @@ Groups map to audiences, and to the `proxy.ts` matcher:
 | `(publicRoutes)` | `/login`, `/tracks`, `/event-details`, `/playbook` | anyone |
 | `(publicRoutes)`, gated | `/register` | signed-in, teamless (redirects to `/dashboard` once a team exists) |
 | `(teamRoutes)` | `/dashboard`, `/dashboard/team-details`, `/dashboard/leaderboard` | signed-in team leader |
-| `(panelRoutes)` | `/panel`, `/panel/isd1`, `/panel/isd2` | evaluators |
+| `(panelRoutes)` | `/panel`, `/panel/[round]`, `/panel/[round]/leaderboard` | evaluators |
 | `(adminRoutes)` | `/admin` | admins |
 
 `/` is the landing page, composed from `src/components/landing/*`. It is **dynamic**, not static: `getCtaState()` (`src/lib/auth/cta.ts`) picks the primary CTA per visitor — `Log In` / `Register` / `Dashboard` — and `page.tsx` passes one `ctaState` down to `Navbar`, `Hero` and `CtaBanner`. It first checks for a `NEON_AUTH_COOKIE_PREFIX` cookie and returns early, because `auth.getSession()` costs a ~300ms upstream round trip **even when nobody is signed in**; skipping it keeps anonymous TTFB at ~17ms. Don't replace that check with a bare `getSession()`.
@@ -79,8 +79,8 @@ Four distinct layers; keep them separate:
 
 1. `src/db/schema.ts` — single source of truth. Invariants live in the DB as `check`/`unique`/partial-unique constraints, not only in TS.
 2. `src/db/transactions.ts` — every multi-step or concurrency-sensitive write. Uses `pg_advisory_xact_lock(hashtext(teamId))` + `SELECT … FOR UPDATE` so concurrent roster/payment writes can't race. **Any new write that touches more than one row belongs here, not in an action.**
-3. `src/app/actions.ts` — the `"use server"` surface (~27 exports). Does auth (`requireLead` / `requireAdminRole`), deadline checks (`assertBefore`), calls into the transaction layer, writes `audit_log` via the local `log()` helper, then `revalidatePath()`. Almost all app logic funnels through this one file.
-4. `src/db/queries.ts` — intended read layer. **Currently imported by nothing** (see backlog).
+3. `src/app/actions.ts` — the `"use server"` surface. Does auth (`requireLead` / `requireAdminRole`), deadline checks (`assertBefore`), calls into the transaction layer, writes `audit_log` via `log()` (`src/lib/audit.ts`), then `revalidatePath()`. Most app logic still funnels through this one file; `src/actions/panel.ts` is the first domain split off it.
+4. `src/db/queries.ts` — the read layer. Used by `actions.ts` and `src/actions/panel.ts`; it still overlaps `actions.ts` in places (see backlog).
 
 `src/db/index.ts` exports a module-level `@neondatabase/serverless` `Pool` + drizzle `db`; throws at import if `DATABASE_URL` is unset. Scripts import it directly and must `await pool.end()`.
 
@@ -96,6 +96,10 @@ Four distinct layers; keep them separate:
 - `event_config` is a singleton (`id = 1`, enforced by check constraint); at most one active `evaluation_rounds` row (partial unique index).
 - Leaderboard counts only teams that are both `approved` and `paid`.
 - Attendance is one row per `(member_id, event_date)`; scores one row per `(team, round, evaluator)` and upsert on conflict.
+- **Scoring is a four-criterion rubric out of 50** — Problem Understanding /15, Idea Feasibility /10, Decision Making /15, Coordination /10, each with its own `check`. `scores.score` is `GENERATED ALWAYS` as their sum, so it can never be written directly and can never disagree with its parts. `SCORE_CRITERIA` / `SCORE_MAX` in `src/db/schema.ts` are the single source for labels and maxima — derive UI from them, don't retype the numbers.
+- **A judge sits on exactly one panel** (`panel_members.admin_id` is unique), and **a team has exactly one panel per round** (`team_panel_assignments` unique on `(team_id, round_id)`). A team's score is its panel's *per-criterion* mean, summed.
+- A panel may only score a team that is assigned to it for that round, is `accepted` and `paid`, **and** has a member scanned into `attendance` on that round's `event_date`. All four are re-checked inside `upsertPanelScoreAtomically`.
+- `evaluation_rounds.event_date` must be `event_config.day_one` or `day_two`. A `check` cannot reach across tables, so that one is enforced in `createEvaluationRound`, the way `scanAttendance` validates a scan date.
 
 ### Razorpay payment flow
 Three server entry points, all `runtime = "nodejs"` (Node crypto):
@@ -104,6 +108,15 @@ Three server entry points, all `runtime = "nodejs"` (Node crypto):
 - `POST /api/payments/verifywebhook` — legacy alias that re-exports the webhook `POST`.
 
 Both finalize through `markPaymentPaid*Atomically`, which is idempotent (returns early if already `paid`). Signature comparison uses `timingSafeEqual` in `src/lib/razorpay.ts` — keep it that way.
+
+### Judging panel (`/panel`)
+The only place a score is written. `/admin` has no scoring form — one code path means one rubric and no way to bypass panel assignment.
+
+- `/panel` — round picker, plus who is on your panel. `/panel/[round]` — the sheet, with the selected team in `?team=`. `/panel/[round]/leaderboard` — the live board, **no** day-one gate (judges need it during the round; teams don't get it until day one).
+- `[round]` is `evaluation_rounds.slug` (`isd-1`, `isd-2`), not the sequence number or the UUID.
+- `src/actions/panel.ts` is the whole server surface; `getPanelSheet()` returns **one shape** for every state (no round / no panel / empty queue / a team) so pages narrow on the fields rather than on which branch ran.
+- Prev/next walk the queue **A–Z and skip nothing**, so a judge's position never moves under their hand as they save. "Next unscored" is a separate, deliberate jump. The `<ScoreSheet>` is keyed on team id so one team's draft can't leak onto the next.
+- Peer scores are always visible, by design — the panel deliberates together.
 
 ### Playbook (`/playbook`)
 A self-contained mini-site: its own theme (`playbook-theme.tsx`), `typeset.css`, sidebar/TOC/toolbar in `_components/`, and text mirrors in `_content/` served as plaintext at `/playbook/playbook.md` and `/playbook/llms.txt`. Editing event details means updating **both** `_components/article.tsx` and `_content/playbook.md`. See its own `README.md`.
@@ -114,11 +127,11 @@ Known breakage and duplication — fix these rather than building around them:
 
 - **`(publicRoutes)/playbook/` has both `page.tsx` and `page.mdx`** — a duplicate route for the same segment. One must go (`page.tsx` is the real implementation).
 - **`.env.example` says `DATABASE_DIRECT_URL`, `drizzle.config.ts` reads `DIRECT_DATABASE_URL`.** Pick one name and fix the other.
-- **`src/db/queries.ts` is dead** and overlaps `actions.ts` (`getDepartments`, `getActiveTracks` vs `getTracks`, dashboard/leaderboard reads). Either route pages through it or delete it.
+- **`src/db/queries.ts` overlaps `actions.ts`** (`getDepartments`, `getActiveTracks` vs `getTracks`). Route the remaining reads through it or drop the duplicates.
 - **`better-auth` is in `package.json` but unused** — auth goes through `@neondatabase/auth`.
 - **`src/lib/index.ts` is a pointless re-export** of `@/db`; import from `@/db` directly.
-- **Stub pages**: `/register` (gated and routed, but the team form is unbuilt), `/tracks`, `/event-details`, all of `/dashboard/*` and `/panel/*` return placeholder `<div>`s. `/admin` implements only attendance scanning, though `actions.ts` already backs team review, scoring, rounds, announcements and config.
+- **Stub pages**: `/tracks` and `/event-details` still return placeholder `<div>`s.
 - `src/app/globals.css` defines `--font-sans: var(--font-sans)` (self-referential); the real font vars from `layout.tsx` are `--font-inter-sans` and `--font-instrument-serif`.
 - No sign-out anywhere in the app, and the navbar still reads "Log In" for an already signed-in user.
-- `/admin` and `/panel` are guarded by *authentication* only — the middleware has no role concept and the pages never call `requireAdminRole`, so any signed-in Google account can load them. Only the server actions enforce role.
-- `actions.ts` at ~590 lines mixes team, payment, admin, scoring and attendance concerns, and `log()` does a lazy `await import("@/db/schema")` mid-function for no reason. Splitting it by domain is the main structural cleanup.
+- `getAdminReviewData` hands **every admin role, including `volunteer`, every score row**. It should return only what the caller's role needs.
+- `actions.ts` still mixes team, payment, admin, rounds and attendance concerns. Splitting it by domain is the main structural cleanup — `src/actions/panel.ts` is the pattern to follow.

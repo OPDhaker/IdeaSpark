@@ -8,7 +8,6 @@ import {
   admins,
   announcements,
   attendance,
-  auditLog,
   departments,
   evaluationRounds,
   eventConfig,
@@ -29,6 +28,7 @@ import {
   reviewSubmissionAtomically,
   submitIdeaAtomically,
 } from "@/db/transactions";
+import { log } from "@/lib/audit";
 import { auth } from "@/lib/auth/server";
 import { getAdminActor, requireAdminRole } from "@/lib/roles";
 import {
@@ -93,22 +93,6 @@ function todayInIst() {
     month: "2-digit",
     day: "2-digit",
   }).format(new Date());
-}
-
-async function log(
-  actorUserId: string | null,
-  action: string,
-  targetType: string,
-  targetId: string,
-  meta?: unknown,
-) {
-  await db.insert(auditLog).values({
-    actorUserId,
-    action,
-    targetType,
-    targetId,
-    meta: meta ? JSON.stringify(meta) : null,
-  });
 }
 
 export async function getDepartments() {
@@ -797,24 +781,50 @@ export async function updateEventConfig(input: {
   return config;
 }
 
-export async function createEvaluationRound(
-  name: string,
-  description: string | undefined,
-  sequenceNo: number,
-) {
+export async function createEvaluationRound(input: {
+  name: string;
+  description?: string;
+  sequenceNo: number;
+  slug: string;
+  eventDate: string;
+}) {
   const admin = await requireAdminRole(["super_admin"]);
-  if (!Number.isInteger(sequenceNo) || sequenceNo < 1)
+  if (!Number.isInteger(input.sequenceNo) || input.sequenceNo < 1)
     throw new Error("Invalid sequence number");
+
+  const slug = input.slug.trim().toLowerCase();
+  if (!/^[a-z0-9]+(-[a-z0-9]+)*$/.test(slug))
+    throw new Error("Slug must be lowercase letters, numbers and dashes");
+
+  // `event_date` decides which attendance rows make a team judgeable, so it has
+  // to be one of the two configured days. A `check` cannot reach across to
+  // `event_config`, so the constraint lives here — the same shape
+  // `scanAttendance` uses to validate a scan date.
+  const [cfg] = await db
+    .select({ dayOne: eventConfig.dayOne, dayTwo: eventConfig.dayTwo })
+    .from(eventConfig)
+    .where(eq(eventConfig.id, 1))
+    .limit(1);
+  if (!cfg) throw new Error("Event configuration is not initialized");
+  if (input.eventDate !== cfg.dayOne && input.eventDate !== cfg.dayTwo)
+    throw new Error(`A round must run on ${cfg.dayOne} or ${cfg.dayTwo}`);
+
   const [round] = await db
     .insert(evaluationRounds)
     .values({
-      name: name.trim(),
-      description: description?.trim() || null,
-      sequenceNo,
+      name: input.name.trim(),
+      description: input.description?.trim() || null,
+      sequenceNo: input.sequenceNo,
+      slug,
+      eventDate: input.eventDate,
     })
     .returning();
-  await log(admin.id, "round.create", "round", round.id, { sequenceNo });
+  await log(admin.id, "round.create", "round", round.id, {
+    sequenceNo: input.sequenceNo,
+    slug,
+  });
   revalidatePath("/admin");
+  revalidatePath("/panel", "layout");
   return round;
 }
 
@@ -902,36 +912,6 @@ export async function setTeamStatus(teamId: string, status: ReviewStatus) {
   revalidatePath("/dashboard");
   revalidatePath("/dashboard/leaderboard");
   return team;
-}
-
-export async function upsertScore(
-  roundId: string,
-  teamId: string,
-  score: number,
-  remarks?: string,
-) {
-  const admin = await requireAdminRole(["evaluator", "super_admin"]);
-  if (!Number.isFinite(score) || score < 0 || score > 100)
-    throw new Error("Score must be between 0 and 100");
-
-  const [row] = await db
-    .insert(scores)
-    .values({
-      teamId,
-      roundId,
-      evaluatorId: admin.id,
-      score: score.toFixed(2),
-      remarks: remarks?.trim() || null,
-    })
-    .onConflictDoUpdate({
-      target: [scores.teamId, scores.roundId, scores.evaluatorId],
-      set: { score: score.toFixed(2), remarks: remarks?.trim() || null },
-    })
-    .returning();
-
-  await log(admin.id, "score.upsert", "team", teamId, { roundId, score });
-  revalidatePath("/dashboard/leaderboard");
-  return row;
 }
 
 export async function scanAttendance(

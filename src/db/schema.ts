@@ -8,6 +8,7 @@ import {
   numeric,
   pgEnum,
   pgTable,
+  primaryKey,
   text,
   timestamp,
   unique,
@@ -147,14 +148,28 @@ export const evaluationRounds = pgTable(
   {
     id: uuid().defaultRandom().primaryKey(),
     name: varchar({ length: 255 }).notNull(),
+    /** URL segment for `/panel/[round]`, e.g. `isd-1`. */
+    slug: varchar({ length: 64 }).notNull().unique(),
     description: text(),
     sequenceNo: integer("sequence_no").notNull().unique(),
+    /**
+     * The event day this round runs on. It decides which `attendance` rows make
+     * a team judgeable, so it has to be stored rather than derived: a `check`
+     * cannot reach into `event_config` to compare against `day_one`/`day_two`.
+     * That comparison lives in `createEvaluationRound`, the same way
+     * `scanAttendance` validates a scan date.
+     */
+    eventDate: date("event_date").notNull(),
     isActive: boolean("is_active").notNull().default(false),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
       .defaultNow(),
   },
   (t) => [
+    check(
+      "evaluation_rounds_slug_format",
+      sql`${t.slug} ~ '^[a-z0-9]+(-[a-z0-9]+)*$'`,
+    ),
     uniqueIndex("evaluation_rounds_one_active_unique")
       .on(t.isActive)
       .where(sql`${t.isActive} = true`),
@@ -250,6 +265,29 @@ export const attendance = pgTable(
   ],
 );
 
+/**
+ * The judging rubric, out of 50. One row per (team, round, evaluator): every
+ * judge on a panel scores the same team on their own screen, and the team's
+ * number is the panel's per-criterion mean.
+ *
+ * Each criterion carries its own range `check`, so "out of 50" is a property of
+ * the columns rather than a separate total that could drift from its parts.
+ * `score` is `GENERATED ALWAYS` for the same reason — it is the sum by
+ * definition, not by whichever action last wrote the row, and a write to it is
+ * rejected by the database.
+ */
+export const SCORE_CRITERIA = [
+  { key: "problemUnderstanding", label: "Problem Understanding", max: 15 },
+  { key: "ideaFeasibility", label: "Idea Feasibility", max: 10 },
+  { key: "decisionMaking", label: "Decision Making", max: 15 },
+  { key: "coordination", label: "Coordination", max: 10 },
+] as const;
+
+export type ScoreCriterionKey = (typeof SCORE_CRITERIA)[number]["key"];
+
+/** 50 — the rubric total, derived so it cannot fall out of step with the parts. */
+export const SCORE_MAX = SCORE_CRITERIA.reduce((sum, c) => sum + c.max, 0);
+
 export const scores = pgTable(
   "scores",
   {
@@ -263,18 +301,45 @@ export const scores = pgTable(
     evaluatorId: uuid("evaluator_id")
       .notNull()
       .references(() => admins.id, { onDelete: "cascade" }),
-    score: numeric({ precision: 5, scale: 2 }).notNull(),
+    problemUnderstanding: numeric("problem_understanding", {
+      precision: 5,
+      scale: 2,
+    }).notNull(),
+    ideaFeasibility: numeric("idea_feasibility", {
+      precision: 5,
+      scale: 2,
+    }).notNull(),
+    decisionMaking: numeric("decision_making", {
+      precision: 5,
+      scale: 2,
+    }).notNull(),
+    coordination: numeric({ precision: 5, scale: 2 }).notNull(),
+    /** Generated: never write this column. */
+    score: numeric({ precision: 6, scale: 2 }).generatedAlwaysAs(
+      sql`problem_understanding + idea_feasibility + decision_making + coordination`,
+    ),
     remarks: text(),
-    innovation: numeric({ precision: 5, scale: 2 }),
-    feasibility: numeric({ precision: 5, scale: 2 }),
-    impact: numeric({ precision: 5, scale: 2 }),
-    presentation: numeric({ precision: 5, scale: 2 }),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
       .defaultNow(),
   },
   (t) => [
-    check("scores_score_range", sql`${t.score} >= 0 AND ${t.score} <= 100`),
+    check(
+      "scores_problem_understanding_range",
+      sql`${t.problemUnderstanding} >= 0 AND ${t.problemUnderstanding} <= 15`,
+    ),
+    check(
+      "scores_idea_feasibility_range",
+      sql`${t.ideaFeasibility} >= 0 AND ${t.ideaFeasibility} <= 10`,
+    ),
+    check(
+      "scores_decision_making_range",
+      sql`${t.decisionMaking} >= 0 AND ${t.decisionMaking} <= 15`,
+    ),
+    check(
+      "scores_coordination_range",
+      sql`${t.coordination} >= 0 AND ${t.coordination} <= 10`,
+    ),
     unique("scores_team_round_evaluator_unique").on(
       t.teamId,
       t.roundId,
@@ -283,6 +348,72 @@ export const scores = pgTable(
     index("scores_team_id_idx").on(t.teamId),
     index("scores_round_id_idx").on(t.roundId),
     index("scores_evaluator_id_idx").on(t.evaluatorId),
+  ],
+);
+
+/**
+ * A judging panel: two or more evaluators who score the same teams and whose
+ * scores average into one number per team.
+ */
+export const panels = pgTable(
+  "panels",
+  {
+    id: uuid().defaultRandom().primaryKey(),
+    name: varchar({ length: 128 }).notNull().unique(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [check("panels_name_not_blank", sql`length(trim(${t.name})) > 0`)],
+);
+
+/**
+ * Panel roster. `unique(adminId)` is the "one panel per judge" rule: panels are
+ * global and assignments are per round, so a judge sitting on two panels would
+ * have no single answer to "which teams are mine".
+ */
+export const panelMembers = pgTable(
+  "panel_members",
+  {
+    panelId: uuid("panel_id")
+      .notNull()
+      .references(() => panels.id, { onDelete: "cascade" }),
+    adminId: uuid("admin_id")
+      .notNull()
+      .references(() => admins.id, { onDelete: "cascade" }),
+  },
+  (t) => [
+    primaryKey({ columns: [t.panelId, t.adminId] }),
+    unique("panel_members_one_panel_per_admin").on(t.adminId),
+    index("panel_members_admin_id_idx").on(t.adminId),
+  ],
+);
+
+/** Which panel judges which team, per round. Set by a super admin. */
+export const teamPanelAssignments = pgTable(
+  "team_panel_assignments",
+  {
+    id: uuid().defaultRandom().primaryKey(),
+    teamId: uuid("team_id")
+      .notNull()
+      .references(() => teams.id, { onDelete: "cascade" }),
+    roundId: uuid("round_id")
+      .notNull()
+      .references(() => evaluationRounds.id, { onDelete: "cascade" }),
+    panelId: uuid("panel_id")
+      .notNull()
+      .references(() => panels.id, { onDelete: "cascade" }),
+    assignedBy: uuid("assigned_by").references(() => admins.id, {
+      onDelete: "set null",
+    }),
+    assignedAt: timestamp("assigned_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [
+    unique("team_panel_assignments_team_round_unique").on(t.teamId, t.roundId),
+    index("team_panel_assignments_round_panel_idx").on(t.roundId, t.panelId),
+    index("team_panel_assignments_team_id_idx").on(t.teamId),
   ],
 );
 

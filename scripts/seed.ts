@@ -29,14 +29,34 @@ await db.transaction(async (tx) => {
       .onConflictDoNothing();
   }
 
+  // `YYYY-MM-DD`, not timestamps: these are calendar days, and they must
+  // satisfy event_config_submission_before_day_one and event_config_day_order.
+  const dayOne = process.env.DAY_ONE?.trim() || "2026-10-05";
+  const dayTwo = process.env.DAY_TWO?.trim() || "2026-10-06";
+
   // ISD-1 is the round teams submit into; without an active round nothing can
   // be submitted at all. ISD-2 stays inactive — only one round may be active
   // (evaluation_rounds_one_active_unique).
+  //
+  // `slug` is the `/panel/[round]` segment; `eventDate` is the day whose
+  // attendance decides which teams a panel can score.
   await tx
     .insert(evaluationRounds)
     .values([
-      { name: "ISD-1", sequenceNo: 1, isActive: true },
-      { name: "ISD-2", sequenceNo: 2, isActive: false },
+      {
+        name: "ISD-1",
+        slug: "isd-1",
+        sequenceNo: 1,
+        eventDate: dayOne,
+        isActive: true,
+      },
+      {
+        name: "ISD-2",
+        slug: "isd-2",
+        sequenceNo: 2,
+        eventDate: dayTwo,
+        isActive: false,
+      },
     ])
     .onConflictDoNothing({ target: evaluationRounds.sequenceNo });
 
@@ -44,10 +64,6 @@ await db.transaction(async (tx) => {
   const submissionDeadline = process.env.SUBMISSION_DEADLINE;
   const fee = process.env.REGISTRATION_FEE;
   const templateUrl = process.env.SUBMISSION_TEMPLATE_URL?.trim() || null;
-  // `YYYY-MM-DD`, not timestamps: these are calendar days, and they must
-  // satisfy event_config_submission_before_day_one and event_config_day_order.
-  const dayOne = process.env.DAY_ONE?.trim() || "2026-10-05";
-  const dayTwo = process.env.DAY_TWO?.trim() || "2026-10-06";
   if (registrationDeadline && submissionDeadline && fee) {
     await tx
       .insert(eventConfig)

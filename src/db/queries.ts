@@ -1,13 +1,17 @@
-import { and, desc, eq, ilike, sql } from "drizzle-orm";
+import { and, asc, desc, eq, ilike, inArray, sql } from "drizzle-orm";
 import { db } from "./index";
 import {
+  admins,
   attendance,
   departments,
   evaluationRounds,
   eventConfig,
   members,
+  panelMembers,
+  panels,
   scores,
   submissions,
+  teamPanelAssignments,
   teams,
   tracks,
 } from "./schema";
@@ -72,21 +76,224 @@ export async function getAttendanceForTeam(teamId: string) {
     .orderBy(members.name, attendance.eventDate);
 }
 
+/**
+ * A team's score is its panel's *per-criterion* mean, summed — not the mean of
+ * the judges' totals. With all four criteria required the two are the same
+ * number; averaging per criterion is what lets a caller show the breakdown
+ * behind the total.
+ *
+ * Out of 50. The inner join on `scores` keeps an unscored team off the board
+ * entirely rather than ranking it last, so an empty board is the normal state
+ * until judging starts.
+ */
+const panelMean = {
+  problemUnderstanding: sql<string>`coalesce(avg(${scores.problemUnderstanding}), 0)`,
+  ideaFeasibility: sql<string>`coalesce(avg(${scores.ideaFeasibility}), 0)`,
+  decisionMaking: sql<string>`coalesce(avg(${scores.decisionMaking}), 0)`,
+  coordination: sql<string>`coalesce(avg(${scores.coordination}), 0)`,
+};
+
+const panelTotal = sql<string>`
+  coalesce(avg(${scores.problemUnderstanding}), 0)
+  + coalesce(avg(${scores.ideaFeasibility}), 0)
+  + coalesce(avg(${scores.decisionMaking}), 0)
+  + coalesce(avg(${scores.coordination}), 0)
+`;
+
 export async function getLeaderboard() {
   return db
     .select({
       teamId: teams.id,
       teamName: teams.teamName,
       trackName: tracks.name,
-      totalScore: sql<string>`coalesce(sum(${scores.score}), 0)`,
-      averageScore: sql<string>`coalesce(avg(${scores.score}), 0)`,
+      judgeCount: sql<number>`count(distinct ${scores.evaluatorId})::int`,
+      ...panelMean,
+      averageScore: panelTotal,
     })
     .from(scores)
     .innerJoin(teams, eq(scores.teamId, teams.id))
     .leftJoin(tracks, eq(teams.trackId, tracks.id))
     .where(and(eq(teams.paymentStatus, "paid"), eq(teams.status, "accepted")))
     .groupBy(teams.id, teams.teamName, tracks.name)
-    .orderBy(desc(sql`coalesce(avg(${scores.score}), 0)`));
+    .orderBy(desc(panelTotal));
+}
+
+/**
+ * The same board scoped to one round, for the judging panel. No day-one gate:
+ * judges need it live, during the round it describes.
+ */
+export async function getPanelLeaderboardRows(roundId: string) {
+  return db
+    .select({
+      teamId: teams.id,
+      teamName: teams.teamName,
+      trackName: tracks.name,
+      judgeCount: sql<number>`count(distinct ${scores.evaluatorId})::int`,
+      ...panelMean,
+      averageScore: panelTotal,
+    })
+    .from(scores)
+    .innerJoin(teams, eq(scores.teamId, teams.id))
+    .leftJoin(tracks, eq(teams.trackId, tracks.id))
+    .where(
+      and(
+        eq(scores.roundId, roundId),
+        eq(teams.paymentStatus, "paid"),
+        eq(teams.status, "accepted"),
+      ),
+    )
+    .groupBy(teams.id, teams.teamName, tracks.name)
+    .orderBy(desc(panelTotal));
+}
+
+export async function getPanelForAdmin(
+  adminId: string,
+): Promise<{ id: string; name: string } | null> {
+  const [row] = await db
+    .select({ id: panels.id, name: panels.name })
+    .from(panelMembers)
+    .innerJoin(panels, eq(panelMembers.panelId, panels.id))
+    .where(eq(panelMembers.adminId, adminId))
+    .limit(1);
+  return row ?? null;
+}
+
+export async function getPanelJudges(panelId: string) {
+  return db
+    .select({ id: admins.id, name: admins.name, email: admins.email })
+    .from(panelMembers)
+    .innerJoin(admins, eq(panelMembers.adminId, admins.id))
+    .where(eq(panelMembers.panelId, panelId))
+    .orderBy(asc(admins.name));
+}
+
+export async function getRoundBySlug(
+  slug: string,
+): Promise<typeof evaluationRounds.$inferSelect | null> {
+  const [round] = await db
+    .select()
+    .from(evaluationRounds)
+    .where(eq(evaluationRounds.slug, slug))
+    .limit(1);
+  return round ?? null;
+}
+
+export async function listEvaluationRounds() {
+  return db
+    .select()
+    .from(evaluationRounds)
+    .orderBy(asc(evaluationRounds.sequenceNo));
+}
+
+export type PanelQueueTeam = Awaited<
+  ReturnType<typeof getPanelQueue>
+>["teams"][number];
+
+/**
+ * The teams one panel judges in one round: assigned to the panel, accepted,
+ * paid, and physically present on the round's day.
+ *
+ * Ordered by team name A-Z and never filtered by whether a judge has scored
+ * yet, so prev/next stays put under someone's hand as they save. `search` only
+ * narrows what is listed; the neighbours are computed by the caller from the
+ * full ordering.
+ */
+export async function getPanelQueue(input: {
+  roundId: string;
+  panelId: string;
+  eventDate: string;
+}) {
+  const teamRows = await db
+    .select({
+      id: teams.id,
+      teamName: teams.teamName,
+      trackName: tracks.name,
+      status: teams.status,
+    })
+    .from(teamPanelAssignments)
+    .innerJoin(teams, eq(teamPanelAssignments.teamId, teams.id))
+    .leftJoin(tracks, eq(teams.trackId, tracks.id))
+    .where(
+      and(
+        eq(teamPanelAssignments.roundId, input.roundId),
+        eq(teamPanelAssignments.panelId, input.panelId),
+        eq(teams.status, "accepted"),
+        eq(teams.paymentStatus, "paid"),
+        sql`EXISTS (
+          SELECT 1
+          FROM ${attendance} a
+          JOIN ${members} m ON m.id = a.member_id
+          WHERE m.team_id = ${teams.id}
+            AND a.event_date = ${input.eventDate}
+        )`,
+      ),
+    )
+    .orderBy(asc(teams.teamName));
+
+  if (teamRows.length === 0) return { teams: [], scores: [] };
+
+  // Every judge's row, not only the caller's: peer scores are shown on the
+  // sheet, so they are fetched with the queue rather than per team.
+  const scoreRows = await db
+    .select({
+      teamId: scores.teamId,
+      evaluatorId: scores.evaluatorId,
+      evaluatorName: admins.name,
+      problemUnderstanding: scores.problemUnderstanding,
+      ideaFeasibility: scores.ideaFeasibility,
+      decisionMaking: scores.decisionMaking,
+      coordination: scores.coordination,
+      score: scores.score,
+      remarks: scores.remarks,
+    })
+    .from(scores)
+    .innerJoin(admins, eq(scores.evaluatorId, admins.id))
+    .innerJoin(panelMembers, eq(panelMembers.adminId, scores.evaluatorId))
+    .where(
+      and(
+        eq(scores.roundId, input.roundId),
+        eq(panelMembers.panelId, input.panelId),
+        inArray(
+          scores.teamId,
+          teamRows.map((t) => t.id),
+        ),
+      ),
+    )
+    .orderBy(asc(admins.name));
+
+  return { teams: teamRows, scores: scoreRows };
+}
+
+/** Every panel with its judges and how many teams it holds in a round. */
+export async function getPanelsWithJudges() {
+  const panelRows = await db
+    .select({ id: panels.id, name: panels.name })
+    .from(panels)
+    .orderBy(asc(panels.name));
+
+  const judgeRows = await db
+    .select({
+      panelId: panelMembers.panelId,
+      adminId: admins.id,
+      name: admins.name,
+      email: admins.email,
+      role: admins.role,
+    })
+    .from(panelMembers)
+    .innerJoin(admins, eq(panelMembers.adminId, admins.id))
+    .orderBy(asc(admins.name));
+
+  return { panels: panelRows, judges: judgeRows };
+}
+
+export async function listAssignments(roundId: string) {
+  return db
+    .select({
+      teamId: teamPanelAssignments.teamId,
+      panelId: teamPanelAssignments.panelId,
+    })
+    .from(teamPanelAssignments)
+    .where(eq(teamPanelAssignments.roundId, roundId));
 }
 
 export async function getEventConfig() {
