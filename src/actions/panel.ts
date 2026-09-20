@@ -4,6 +4,7 @@ import { and, asc, eq, inArray } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { db } from "@/db";
 import {
+  getPanelCounts,
   getPanelForAdmin,
   getPanelJudges,
   getPanelLeaderboardRows,
@@ -29,6 +30,13 @@ type PanelQueue = Awaited<ReturnType<typeof getPanelQueue>>;
 export type PanelSheetTeam = PanelQueue["teams"][number] & {
   scores: PanelQueue["scores"];
   scoredByMe: boolean;
+  /**
+   * Whether the caller may write a score for this team. Only a judge on the
+   * team's own panel can; a super admin who is not on it sees everything and
+   * saves nothing. `upsertPanelScoreAtomically` enforces the same rule, so
+   * this only decides whether the form is offered.
+   */
+  canScore: boolean;
 };
 
 /**
@@ -38,8 +46,13 @@ export type PanelSheetTeam = PanelQueue["teams"][number] & {
  */
 export type PanelSheet = {
   round: Awaited<ReturnType<typeof getRoundBySlug>>;
+  /** The panel the caller sits on, if any — not the one being viewed. */
   panel: Awaited<ReturnType<typeof getPanelForAdmin>>;
-  admin: { id: string; name: string };
+  admin: { id: string; name: string; isSuperAdmin: boolean };
+  /** Panels to choose between. Empty for a judge, who sees only their own. */
+  panelOptions: Array<{ id: string; name: string; teamCount: number }>;
+  /** Which panel's queue is being shown; null means "every team". */
+  viewingPanelId: string | null;
   teams: PanelSheetTeam[];
   current: PanelSheetTeam | null;
   /** Zero-based index of `current` in `teams`; -1 when there is none. */
@@ -103,19 +116,32 @@ export async function upsertScore(input: ScoreInput) {
   return row;
 }
 
-/** Rounds, plus which panel the signed-in judge sits on. */
+/**
+ * Rounds, plus which panel the signed-in judge sits on.
+ *
+ * A super admin also gets every panel and its roster: they can look into any
+ * of them, even though they can only write to their own.
+ */
 export async function getPanelRounds() {
   const admin = await requireAdminRole([...JUDGE_ROLES]);
-  const [rounds, panel] = await Promise.all([
+  const isSuperAdmin = admin.role === "super_admin";
+
+  const [rounds, panel, all] = await Promise.all([
     listEvaluationRounds(),
     getPanelForAdmin(admin.id),
+    isSuperAdmin ? getPanelsWithJudges() : Promise.resolve(null),
   ]);
 
   return {
-    admin: { id: admin.id, name: admin.name, role: admin.role },
+    admin: { id: admin.id, name: admin.name, role: admin.role, isSuperAdmin },
     rounds,
     panel,
     judges: panel ? await getPanelJudges(panel.id) : [],
+    allPanels:
+      all?.panels.map((p) => ({
+        ...p,
+        judges: all.judges.filter((j) => j.panelId === p.id),
+      })) ?? [],
   };
 }
 
@@ -130,9 +156,12 @@ export async function getPanelRounds() {
 export async function getPanelSheet(
   slug: string,
   teamId?: string,
+  /** Super admin only: a panel id, or `"all"` for every judgeable team. */
+  panelFilter?: string,
 ): Promise<PanelSheet> {
   const admin = await requireAdminRole([...JUDGE_ROLES]);
-  const me = { id: admin.id, name: admin.name };
+  const isSuperAdmin = admin.role === "super_admin";
+  const me = { id: admin.id, name: admin.name, isSuperAdmin };
 
   const round = await getRoundBySlug(slug);
   // One shape in every case, rather than a union: each of "no such round", "no
@@ -142,6 +171,8 @@ export async function getPanelSheet(
     round,
     panel: null,
     admin: me,
+    panelOptions: [],
+    viewingPanelId: null,
     teams: [],
     current: null,
     position: -1,
@@ -154,11 +185,25 @@ export async function getPanelSheet(
   if (!round) return empty;
 
   const panel = await getPanelForAdmin(admin.id);
-  if (!panel) return { ...empty, round };
+
+  // A judge with no panel has nothing to look at. A super admin always does —
+  // oversight is the whole point of the role — so they fall through with the
+  // panel switcher instead of a dead end.
+  if (!panel && !isSuperAdmin) return { ...empty, round };
+
+  const panelOptions = isSuperAdmin ? await getPanelCounts(round.id) : [];
+
+  // Default to the caller's own panel, which is the only one they can write
+  // to. `"all"` is the deliberate step out of it.
+  const viewingPanelId = isSuperAdmin
+    ? panelFilter === "all"
+      ? null
+      : (panelFilter ?? panel?.id ?? null)
+    : (panel?.id ?? null);
 
   const { teams: queue, scores: scoreRows } = await getPanelQueue({
     roundId: round.id,
-    panelId: panel.id,
+    panelId: viewingPanelId,
     eventDate: round.eventDate,
   });
 
@@ -175,6 +220,7 @@ export async function getPanelSheet(
       ...team,
       scores: rows,
       scoredByMe: rows.some((row) => row.evaluatorId === admin.id),
+      canScore: Boolean(panel) && team.panelId === panel?.id,
     };
   });
 
@@ -185,16 +231,19 @@ export async function getPanelSheet(
   const current: PanelSheetTeam | null = entries[position] ?? null;
 
   // Forward first, then wrap — a judge working down the list wants the next one
-  // ahead of them, not the first one they skipped an hour ago.
+  // ahead of them, not the first one they skipped an hour ago. Only teams they
+  // can actually score count as "unscored".
   const nextUnscored =
-    entries.find((t, i) => i > position && !t.scoredByMe) ??
-    entries.find((t, i) => i !== position && !t.scoredByMe) ??
+    entries.find((t, i) => i > position && t.canScore && !t.scoredByMe) ??
+    entries.find((t, i) => i !== position && t.canScore && !t.scoredByMe) ??
     null;
 
   return {
     round,
     panel,
     admin: me,
+    panelOptions,
+    viewingPanelId,
     teams: entries,
     current,
     position: current ? position : -1,

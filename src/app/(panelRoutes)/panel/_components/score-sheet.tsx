@@ -1,6 +1,6 @@
 "use client";
 
-import { Check, Loader2 } from "lucide-react";
+import { Check, Eye, Loader2 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { upsertScore } from "@/actions/panel";
@@ -49,6 +49,8 @@ export function ScoreSheet({
   teamName,
   myScore,
   peerScores,
+  canScore,
+  panelName,
 }: {
   roundId: string;
   teamId: string;
@@ -56,6 +58,14 @@ export function ScoreSheet({
   myScore: PeerScore | null;
   /** Every other judge on the panel who has scored this team. */
   peerScores: PeerScore[];
+  /**
+   * False when the viewer is not on this team's panel — a super admin looking
+   * in. The form renders read-only rather than disappearing, because seeing
+   * the rubric behind a number is the point of looking.
+   */
+  canScore: boolean;
+  /** The panel that owns this team, for the read-only explanation. */
+  panelName: string | null;
 }) {
   const router = useRouter();
   const [draft, setDraft] = useState<Draft>(() => toDraft(myScore));
@@ -86,7 +96,7 @@ export function ScoreSheet({
   const total = complete ? values.reduce((sum, v) => sum + v.value, 0) : null;
 
   async function save() {
-    if (!complete || !inRange) return;
+    if (!canScore || !complete || !inRange) return;
     setPending(true);
     setError("");
     try {
@@ -138,6 +148,8 @@ export function ScoreSheet({
                   step="0.5"
                   value={criterion.raw}
                   aria-invalid={over}
+                  readOnly={!canScore}
+                  disabled={!canScore}
                   onChange={(event) =>
                     setDraft((current) => ({
                       ...current,
@@ -164,7 +176,11 @@ export function ScoreSheet({
             id="remarks"
             rows={4}
             value={remarks}
-            placeholder={`What stood out about ${teamName}?`}
+            readOnly={!canScore}
+            disabled={!canScore}
+            placeholder={
+              canScore ? `What stood out about ${teamName}?` : "No remarks"
+            }
             onChange={(event) => setRemarks(event.target.value)}
           />
         </div>
@@ -187,7 +203,10 @@ export function ScoreSheet({
               All four criteria are required: `scores.score` is generated from
               them, so a partial sheet has no total to rank on.
             */}
-            <Button type="submit" disabled={!complete || !inRange || pending}>
+            <Button
+              type="submit"
+              disabled={!canScore || !complete || !inRange || pending}
+            >
               {pending ? (
                 <Loader2 aria-hidden className="size-4 animate-spin" />
               ) : null}
@@ -196,9 +215,19 @@ export function ScoreSheet({
           </div>
         </div>
 
-        {!complete ? (
+        {canScore && !complete ? (
           <p className="text-muted-foreground text-xs">
             Fill all four criteria to save.
+          </p>
+        ) : null}
+        {!canScore ? (
+          <p className="flex items-start gap-2 text-muted-foreground text-xs">
+            <Eye aria-hidden className="mt-0.5 size-3.5 shrink-0" />
+            Read-only.{" "}
+            {panelName
+              ? `${panelName} scores this team.`
+              : "No panel has been assigned this team."}{" "}
+            You can see the scores but not change them.
           </p>
         ) : null}
         {error ? <p className="text-destructive text-sm">{error}</p> : null}
@@ -206,11 +235,13 @@ export function ScoreSheet({
 
       <aside className="grid content-start gap-4">
         <h2 className="text-muted-foreground text-xs uppercase tracking-[0.12em]">
-          Your panel
+          {canScore ? "Your panel" : (panelName ?? "Scores")}
         </h2>
         {peerScores.length === 0 ? (
           <p className="text-muted-foreground text-sm">
-            No other judge has scored {teamName} yet.
+            {canScore
+              ? `No other judge has scored ${teamName} yet.`
+              : `Nobody has scored ${teamName} yet.`}
           </p>
         ) : (
           <ul className="grid gap-3">

@@ -99,6 +99,7 @@ Four distinct layers; keep them separate:
 - **Scoring is a four-criterion rubric out of 50** — Problem Understanding /15, Idea Feasibility /10, Decision Making /15, Coordination /10, each with its own `check`. `scores.score` is `GENERATED ALWAYS` as their sum, so it can never be written directly and can never disagree with its parts. `SCORE_CRITERIA` / `SCORE_MAX` in `src/db/schema.ts` are the single source for labels and maxima — derive UI from them, don't retype the numbers.
 - **A judge sits on exactly one panel** (`panel_members.admin_id` is unique), and **a team has exactly one panel per round** (`team_panel_assignments` unique on `(team_id, round_id)`). A team's score is its panel's *per-criterion* mean, summed.
 - A panel may only score a team that is assigned to it for that round, is `accepted` and `paid`, **and** has a member scanned into `attendance` on that round's `event_date`. All four are re-checked inside `upsertPanelScoreAtomically`.
+- **`super_admin` sees everything and writes nothing extra.** They get every panel, every queue and every score, but the write gates above are not relaxed for them: saving a score still means sitting on that team's panel. A super admin who is not on it gets a read-only sheet. This keeps a team's mean exactly its panel's mean — an admin looking into a team cannot accidentally become a voice in its score.
 - `evaluation_rounds.event_date` must be `event_config.day_one` or `day_two`. A `check` cannot reach across tables, so that one is enforced in `createEvaluationRound`, the way `scanAttendance` validates a scan date.
 
 ### Razorpay payment flow
@@ -114,7 +115,8 @@ The only place a score is written. `/admin` has no scoring form — one code pat
 
 - `/panel` — round picker, plus who is on your panel. `/panel/[round]` — the sheet, with the selected team in `?team=`. `/panel/[round]/leaderboard` — the live board, **no** day-one gate (judges need it during the round; teams don't get it until day one).
 - `[round]` is `evaluation_rounds.slug` (`isd-1`, `isd-2`), not the sequence number or the UUID.
-- `src/actions/panel.ts` is the whole server surface; `getPanelSheet()` returns **one shape** for every state (no round / no panel / empty queue / a team) so pages narrow on the fields rather than on which branch ran.
+- `src/actions/panel.ts` is the whole server surface; `getPanelSheet()` returns **one shape** for every state (no round / no panel / empty queue / a team) so pages narrow on the fields rather than on which branch ran. It carries `canScore` per team — the UI reads that rather than re-deriving the rule.
+- A `super_admin` gets a panel switcher (`?panel=<id>` or `?panel=all`); `getPanelQueue({ panelId: null })` is the unscoped view and left-joins the assignment, so it lists unassigned teams too.
 - Prev/next walk the queue **A–Z and skip nothing**, so a judge's position never moves under their hand as they save. "Next unscored" is a separate, deliberate jump. The `<ScoreSheet>` is keyed on team id so one team's draft can't leak onto the next.
 - Peer scores are always visible, by design — the panel deliberates together.
 

@@ -18,7 +18,7 @@ function formatDay(day: string) {
 }
 
 export default async function PanelOverviewPage() {
-  const { admin, rounds, panel, judges } = await getPanelRounds();
+  const { admin, rounds, panel, judges, allPanels } = await getPanelRounds();
 
   return (
     <div className="p-6 md:p-12">
@@ -28,7 +28,8 @@ export default async function PanelOverviewPage() {
             Judging Panel
           </h1>
           <p className="mt-3 text-muted-foreground text-sm">
-            Signed in as {admin.name}.
+            Signed in as {admin.name}
+            {admin.isSuperAdmin ? " · super admin" : ""}.
           </p>
         </header>
 
@@ -66,11 +67,43 @@ export default async function PanelOverviewPage() {
             <div>
               <h2 className="font-medium">You are not on a judging panel</h2>
               <p className="mt-1 text-muted-foreground text-sm">
-                An admin has to add you to one before any team shows up here.
+                {admin.isSuperAdmin
+                  ? "You can see every panel and every score, but saving one means sitting on that team's panel. Add yourself to a panel in the control room to score."
+                  : "An admin has to add you to one before any team shows up here."}
               </p>
             </div>
           </section>
         )}
+
+        {/*
+          Oversight view. A super admin can open any of these, but the sheet
+          stays read-only outside their own panel.
+        */}
+        {admin.isSuperAdmin && allPanels.length > 0 ? (
+          <section className="grid gap-4">
+            <h2 className="text-muted-foreground text-xs uppercase tracking-[0.12em]">
+              All panels
+            </h2>
+            <ul className="grid gap-3">
+              {allPanels.map((item) => (
+                <li
+                  key={item.id}
+                  className="rounded-md border border-foreground/15 p-5"
+                >
+                  <p className="flex items-center gap-2 font-medium">
+                    {item.name}
+                    {item.id === panel?.id ? <Badge>Yours</Badge> : null}
+                  </p>
+                  <p className="mt-1 text-muted-foreground text-sm">
+                    {item.judges.length === 0
+                      ? "No judges yet"
+                      : item.judges.map((judge) => judge.name).join(", ")}
+                  </p>
+                </li>
+              ))}
+            </ul>
+          </section>
+        ) : null}
 
         <section className="grid gap-4">
           <h2 className="text-muted-foreground text-xs uppercase tracking-[0.12em]">

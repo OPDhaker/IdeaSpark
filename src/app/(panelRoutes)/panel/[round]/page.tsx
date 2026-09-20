@@ -4,6 +4,7 @@ import { notFound } from "next/navigation";
 import { getPanelSheet } from "@/actions/panel";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { PanelSwitcher } from "../_components/panel-switcher";
 import { ScoreSheet } from "../_components/score-sheet";
 import { TeamNav } from "../_components/team-nav";
 import { TeamPicker } from "../_components/team-picker";
@@ -27,10 +28,11 @@ export default async function PanelRoundPage({
   searchParams,
 }: PageProps<"/panel/[round]">) {
   const { round: slug } = await params;
-  const { team } = await searchParams;
+  const { team, panel } = await searchParams;
   const selected = Array.isArray(team) ? team[0] : team;
+  const panelFilter = Array.isArray(panel) ? panel[0] : panel;
 
-  const sheet = await getPanelSheet(slug, selected);
+  const sheet = await getPanelSheet(slug, selected, panelFilter);
   if (!sheet.round) notFound();
 
   const header = (
@@ -41,16 +43,26 @@ export default async function PanelRoundPage({
           {sheet.round.isActive ? <Badge>Live</Badge> : null}
         </p>
       </div>
-      <Button asChild variant="ghost">
-        <Link href={`/panel/${slug}/leaderboard`}>
-          <Trophy aria-hidden />
-          Leaderboard
-        </Link>
-      </Button>
+      <div className="flex items-center gap-4">
+        {sheet.admin.isSuperAdmin && sheet.panelOptions.length > 0 ? (
+          <PanelSwitcher
+            slug={slug}
+            options={sheet.panelOptions}
+            viewingPanelId={sheet.viewingPanelId}
+            myPanelId={sheet.panel?.id ?? null}
+          />
+        ) : null}
+        <Button asChild variant="ghost">
+          <Link href={`/panel/${slug}/leaderboard`}>
+            <Trophy aria-hidden />
+            Leaderboard
+          </Link>
+        </Button>
+      </div>
     </header>
   );
 
-  if (!sheet.panel) {
+  if (!sheet.panel && !sheet.admin.isSuperAdmin) {
     return (
       <div className="grid gap-8 p-6 md:p-12">
         {header}
@@ -62,6 +74,12 @@ export default async function PanelRoundPage({
     );
   }
 
+  const scopeName = sheet.viewingPanelId
+    ? (sheet.panelOptions.find((p) => p.id === sheet.viewingPanelId)?.name ??
+      sheet.panel?.name ??
+      "Your panel")
+    : "Every panel";
+
   if (!sheet.current) {
     return (
       <div className="grid gap-8 p-6 md:p-12">
@@ -72,7 +90,7 @@ export default async function PanelRoundPage({
         */}
         <Empty
           title="No teams to score yet"
-          body={`${sheet.panel.name} has no teams for ${sheet.round.name}. A team appears once an admin assigns it to this panel, it has been accepted and paid, and at least one member has been scanned in on the day.`}
+          body={`${scopeName} has no teams for ${sheet.round.name}. A team appears once an admin assigns it to a panel, it has been accepted and paid, and at least one member has been scanned in on the day.`}
         />
       </div>
     );
@@ -91,11 +109,14 @@ export default async function PanelRoundPage({
         <TeamPicker
           slug={slug}
           currentId={current.id}
+          showPanel={sheet.viewingPanelId === null}
           teams={sheet.teams.map((entry) => ({
             id: entry.id,
             teamName: entry.teamName,
             trackName: entry.trackName,
             scoredByMe: entry.scoredByMe,
+            canScore: entry.canScore,
+            panelName: entry.panelName,
           }))}
         />
 
@@ -126,6 +147,8 @@ export default async function PanelRoundPage({
             teamName={current.teamName}
             myScore={sheet.myScore}
             peerScores={peers}
+            canScore={current.canScore}
+            panelName={current.panelName}
           />
         </div>
       </div>

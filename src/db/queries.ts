@@ -185,55 +185,70 @@ export async function listEvaluationRounds() {
     .orderBy(asc(evaluationRounds.sequenceNo));
 }
 
-export type PanelQueueTeam = Awaited<
-  ReturnType<typeof getPanelQueue>
->["teams"][number];
-
 /**
- * The teams one panel judges in one round: assigned to the panel, accepted,
- * paid, and physically present on the round's day.
+ * The teams judgeable in one round: accepted, paid, and physically present on
+ * the round's day.
+ *
+ * `panelId` scopes it to one panel's assignments. Passing `null` returns every
+ * judgeable team in the round with whichever panel owns it (or none) attached —
+ * that is the super-admin view, and it is read-only: writing a score still
+ * requires the evaluator to sit on the team's own panel, which
+ * `upsertPanelScoreAtomically` enforces.
  *
  * Ordered by team name A-Z and never filtered by whether a judge has scored
- * yet, so prev/next stays put under someone's hand as they save. `search` only
- * narrows what is listed; the neighbours are computed by the caller from the
- * full ordering.
+ * yet, so prev/next stays put under someone's hand as they save.
  */
 export async function getPanelQueue(input: {
   roundId: string;
-  panelId: string;
+  panelId: string | null;
   eventDate: string;
 }) {
+  const present = sql`EXISTS (
+    SELECT 1
+    FROM ${attendance} a
+    JOIN ${members} m ON m.id = a.member_id
+    WHERE m.team_id = ${teams.id}
+      AND a.event_date = ${input.eventDate}
+  )`;
+
   const teamRows = await db
     .select({
       id: teams.id,
       teamName: teams.teamName,
       trackName: tracks.name,
       status: teams.status,
+      panelId: teamPanelAssignments.panelId,
+      panelName: panels.name,
     })
-    .from(teamPanelAssignments)
-    .innerJoin(teams, eq(teamPanelAssignments.teamId, teams.id))
+    .from(teams)
+    // A left join, so the unscoped view still lists a team no panel owns yet.
+    .leftJoin(
+      teamPanelAssignments,
+      and(
+        eq(teamPanelAssignments.teamId, teams.id),
+        eq(teamPanelAssignments.roundId, input.roundId),
+      ),
+    )
+    .leftJoin(panels, eq(teamPanelAssignments.panelId, panels.id))
     .leftJoin(tracks, eq(teams.trackId, tracks.id))
     .where(
       and(
-        eq(teamPanelAssignments.roundId, input.roundId),
-        eq(teamPanelAssignments.panelId, input.panelId),
         eq(teams.status, "accepted"),
         eq(teams.paymentStatus, "paid"),
-        sql`EXISTS (
-          SELECT 1
-          FROM ${attendance} a
-          JOIN ${members} m ON m.id = a.member_id
-          WHERE m.team_id = ${teams.id}
-            AND a.event_date = ${input.eventDate}
-        )`,
+        present,
+        input.panelId
+          ? eq(teamPanelAssignments.panelId, input.panelId)
+          : undefined,
       ),
     )
     .orderBy(asc(teams.teamName));
 
-  if (teamRows.length === 0) return { teams: [], scores: [] };
+  if (teamRows.length === 0)
+    return { teams: teamRows, scores: [] as PanelQueueScore[] };
 
   // Every judge's row, not only the caller's: peer scores are shown on the
-  // sheet, so they are fetched with the queue rather than per team.
+  // sheet. A team belongs to one panel per round, so these are that panel's
+  // judges without having to filter on the roster.
   const scoreRows = await db
     .select({
       teamId: scores.teamId,
@@ -248,11 +263,9 @@ export async function getPanelQueue(input: {
     })
     .from(scores)
     .innerJoin(admins, eq(scores.evaluatorId, admins.id))
-    .innerJoin(panelMembers, eq(panelMembers.adminId, scores.evaluatorId))
     .where(
       and(
         eq(scores.roundId, input.roundId),
-        eq(panelMembers.panelId, input.panelId),
         inArray(
           scores.teamId,
           teamRows.map((t) => t.id),
@@ -262,6 +275,38 @@ export async function getPanelQueue(input: {
     .orderBy(asc(admins.name));
 
   return { teams: teamRows, scores: scoreRows };
+}
+
+type PanelQueueScore = {
+  teamId: string;
+  evaluatorId: string;
+  evaluatorName: string;
+  problemUnderstanding: string;
+  ideaFeasibility: string;
+  decisionMaking: string;
+  coordination: string;
+  score: string | null;
+  remarks: string | null;
+};
+
+/** Panels with how many teams each holds in a round — the panel switcher. */
+export async function getPanelCounts(roundId: string) {
+  return db
+    .select({
+      id: panels.id,
+      name: panels.name,
+      teamCount: sql<number>`count(${teamPanelAssignments.teamId})::int`,
+    })
+    .from(panels)
+    .leftJoin(
+      teamPanelAssignments,
+      and(
+        eq(teamPanelAssignments.panelId, panels.id),
+        eq(teamPanelAssignments.roundId, roundId),
+      ),
+    )
+    .groupBy(panels.id, panels.name)
+    .orderBy(asc(panels.name));
 }
 
 /** Every panel with its judges and how many teams it holds in a round. */

@@ -11,6 +11,8 @@ export type QueueEntry = {
   teamName: string;
   trackName: string | null;
   scoredByMe: boolean;
+  canScore: boolean;
+  panelName: string | null;
 };
 
 /**
@@ -24,10 +26,13 @@ export function TeamPicker({
   slug,
   teams,
   currentId,
+  showPanel,
 }: {
   slug: string;
   teams: QueueEntry[];
   currentId: string | null;
+  /** True when the list spans panels, so each row has to name its own. */
+  showPanel: boolean;
 }) {
   const [query, setQuery] = useState("");
   const needle = query.trim().toLowerCase();
@@ -35,7 +40,10 @@ export function TeamPicker({
     ? teams.filter((team) => team.teamName.toLowerCase().includes(needle))
     : teams;
 
-  const scored = teams.filter((team) => team.scoredByMe).length;
+  // Counted against the teams this viewer can actually score, so a super
+  // admin looking at another panel does not read "0 of 12 scored by you".
+  const mine = teams.filter((team) => team.canScore);
+  const scored = mine.filter((team) => team.scoredByMe).length;
 
   return (
     <div className="grid content-start gap-4">
@@ -55,7 +63,9 @@ export function TeamPicker({
           />
         </div>
         <p className="text-muted-foreground text-xs tabular-nums">
-          {scored} of {teams.length} scored by you
+          {mine.length === 0
+            ? `${teams.length} team${teams.length === 1 ? "" : "s"} · read-only`
+            : `${scored} of ${mine.length} scored by you`}
         </p>
       </div>
 
@@ -77,7 +87,14 @@ export function TeamPicker({
                     "bg-accent font-medium text-accent-foreground",
                 )}
               >
-                <span className="min-w-0 flex-1 truncate">{team.teamName}</span>
+                <span className="min-w-0 flex-1 truncate">
+                  {team.teamName}
+                  {showPanel ? (
+                    <span className="block truncate text-muted-foreground text-xs">
+                      {team.panelName ?? "Unassigned"}
+                    </span>
+                  ) : null}
+                </span>
                 {team.scoredByMe ? (
                   <Check
                     aria-label="Scored by you"
