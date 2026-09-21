@@ -1,6 +1,6 @@
-import { Sparkles } from "lucide-react";
 import Image from "next/image";
 import Link from "next/link";
+import { AskAi } from "@/components/landing/ask-ai";
 import { outlinePill, solidPill } from "@/components/landing/pill";
 import type { CtaState } from "@/lib/auth/cta";
 
@@ -69,10 +69,7 @@ export function Hero({ ctaState }: { ctaState: CtaState }) {
               <Link href="/playbook" className={outlinePill}>
                 Playbook
               </Link>
-              <button type="button" disabled className={`${outlinePill} gap-2`}>
-                Ask AI
-                <Sparkles aria-hidden className="size-[13px]" />
-              </button>
+              <AskAi />
             </div>
           </div>
 
