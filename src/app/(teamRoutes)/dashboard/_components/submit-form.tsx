@@ -1,7 +1,8 @@
 "use client";
 
 import { zodResolver } from "@hookform/resolvers/zod";
-import { ArrowUp, LoaderCircle } from "lucide-react";
+import { FileUp, LoaderCircle } from "lucide-react";
+import Image from "next/image";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { useForm } from "react-hook-form";
@@ -62,18 +63,31 @@ export function SubmitForm({ roundId }: { roundId: string }) {
 
   return (
     <Form {...form}>
-      <form onSubmit={form.handleSubmit(onSubmit)} noValidate>
-        <ArrowUp aria-hidden className="size-12 stroke-1 text-primary" />
-
-        <h2 className="mt-4 font-serif text-3xl leading-none tracking-[-0.02em]">
-          Upload
-        </h2>
-        <p className="mt-3 text-muted-foreground text-sm">
-          Share the deck for this round. Make sure the link is viewable by
-          anyone.
+      <form
+        onSubmit={form.handleSubmit(onSubmit)}
+        noValidate
+        className="space-y-8"
+      >
+        <div className="flex gap-4 items-center">
+          <Image
+            src="https://thesvg.org/icons/google-drive-2026/default.svg"
+            alt="Google Drive (2026)"
+            width={56}
+            height={56}
+          />
+          <h2 className="text-5xl leading-none tracking-tight font-serif">
+            Upload
+          </h2>
+        </div>
+        <p className="text-muted-foreground text-base">
+          Upload drive link and make sure it is set to "Everyone with this link
+          can view.".{" "}
+          <span className="text-destructive font-medium">
+            This action cannot be undone. Pleae do it very carefully.
+          </span>
         </p>
 
-        <div className="mt-6 flex flex-col gap-4">
+        <div className="flex flex-col gap-4">
           <FormField
             control={form.control}
             name="title"
@@ -102,7 +116,7 @@ export function SubmitForm({ roundId }: { roundId: string }) {
                   <Input
                     type="url"
                     inputMode="url"
-                    placeholder="https://docs.google.com/presentation/..."
+                    placeholder="https://slides.google.com/presentation/..."
                     disabled={submitting}
                     {...field}
                   />
@@ -111,20 +125,20 @@ export function SubmitForm({ roundId }: { roundId: string }) {
               </FormItem>
             )}
           />
-        </div>
 
-        {formError ? (
-          <p role="alert" className="mt-4 text-destructive text-sm">
-            {formError}
-          </p>
-        ) : null}
-
-        <Button type="submit" className="mt-6 w-full" disabled={submitting}>
-          {submitting ? (
-            <LoaderCircle aria-hidden className="animate-spin" />
+          {formError ? (
+            <p role="alert" className="mt-4 text-destructive text-sm">
+              {formError}
+            </p>
           ) : null}
-          {submitting ? "Submitting…" : "Submit idea"}
-        </Button>
+
+          <Button type="submit" className="mt-4 w-full" disabled={submitting}>
+            {submitting ? (
+              <LoaderCircle aria-hidden className="animate-spin" />
+            ) : null}
+            {submitting ? "Submitting…" : "Submit idea"}
+          </Button>
+        </div>
       </form>
     </Form>
   );

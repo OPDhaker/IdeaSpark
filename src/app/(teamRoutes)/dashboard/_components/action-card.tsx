@@ -1,7 +1,8 @@
-import { CheckCircle2, ExternalLink, Ticket } from "lucide-react";
+import { PartyPopper, Ticket } from "lucide-react";
 import Link from "next/link";
 import type { getSubmissionState } from "@/app/actions";
 import { Button } from "@/components/ui/button";
+import { formatMoment } from "./format";
 import { CardBody, CardTitle, DashCard } from "./panel";
 import { SubmitForm } from "./submit-form";
 
@@ -13,14 +14,6 @@ function formatFee(fee: string) {
     currency: "INR",
     maximumFractionDigits: 0,
   }).format(Number(fee));
-}
-
-function formatMoment(value: Date) {
-  return new Intl.DateTimeFormat("en-IN", {
-    dateStyle: "medium",
-    timeStyle: "short",
-    timeZone: "Asia/Kolkata",
-  }).format(value);
 }
 
 /**
@@ -36,7 +29,7 @@ export function ActionCard({ state }: { state: State }) {
   if (state.paymentStatus === "paid") {
     return (
       <DashCard>
-        <Ticket aria-hidden className="size-12 stroke-1 text-primary" />
+        <Ticket aria-hidden className="size-14 stroke-2 text-primary" />
         <div className="mt-4">
           <CardTitle>Your passes are ready</CardTitle>
           <CardBody>
@@ -59,7 +52,7 @@ export function ActionCard({ state }: { state: State }) {
         <CardTitle>Not this time</CardTitle>
         <CardBody>
           Your idea wasn&apos;t picked for this round. It happens to strong
-          teams too — come find us at the event.
+          teams too; come find us at the event.
         </CardBody>
         {state.submission?.remarks ? (
           <blockquote className="mt-5 border-foreground/20 border-l-2 pl-4 text-sm leading-relaxed">
@@ -73,7 +66,7 @@ export function ActionCard({ state }: { state: State }) {
   if (state.teamStatus === "accepted") {
     return (
       <DashCard>
-        <CheckCircle2 aria-hidden className="size-12 stroke-1 text-primary" />
+        <PartyPopper aria-hidden className="size-14 stroke-2 text-primary" />
         <div className="mt-4">
           <CardTitle>You&apos;re in</CardTitle>
           <CardBody>
@@ -83,7 +76,7 @@ export function ActionCard({ state }: { state: State }) {
         </div>
 
         {state.registrationFee ? (
-          <p className="mt-5 font-medium text-4xl tabular-nums">
+          <p className="mt-5 text-6xl font-semibold tracking-tight">
             {formatFee(state.registrationFee)}
           </p>
         ) : null}
@@ -96,7 +89,7 @@ export function ActionCard({ state }: { state: State }) {
           Pay registration fee
         </Button>
         <p className="mt-2 text-center text-muted-foreground text-xs">
-          Payments open shortly — we&apos;ll email you the moment they do.
+          Payments open shortly; we&apos;ll WhatsApp you the moment they do.
         </p>
       </DashCard>
     );
@@ -110,35 +103,26 @@ export function ActionCard({ state }: { state: State }) {
           Your deck is with the reviewers. You&apos;ll see the verdict here.
         </CardBody>
 
-        <dl className="mt-5 flex flex-col gap-3 text-sm">
+        <dl className="flex flex-col gap-2">
           {state.submission?.title ? (
             <div>
-              <dt className="text-muted-foreground text-xs">Idea</dt>
-              <dd className="font-medium">{state.submission.title}</dd>
+              <dt className="text-muted-foreground text-sm">Idea</dt>
+              <dd className="font-medium text-base">
+                {state.submission.title}
+              </dd>
             </div>
           ) : null}
           {state.submission?.submittedAt ? (
             <div>
-              <dt className="text-muted-foreground text-xs">Submitted</dt>
-              <dd className="tabular-nums">
+              <dt className="text-muted-foreground text-sm">Submitted</dt>
+              <dd className="tabular-nums font-medium text-base">
                 {formatMoment(state.submission.submittedAt)}
               </dd>
             </div>
           ) : null}
         </dl>
 
-        {state.submission?.driveLink ? (
-          <Button asChild variant="outline" className="mt-6 w-full">
-            <a
-              href={state.submission.driveLink}
-              target="_blank"
-              rel="noreferrer noopener"
-            >
-              View uploaded PPT
-              <ExternalLink aria-hidden />
-            </a>
-          </Button>
-        ) : null}
+        {/* The deck link lives on the submission card above — one home for it. */}
       </DashCard>
     );
   }

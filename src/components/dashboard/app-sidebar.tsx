@@ -1,6 +1,13 @@
 "use client";
 
-import { LayoutDashboard, Lock, LogOut, Trophy, Users } from "lucide-react";
+import {
+  ExternalLink,
+  LayoutDashboard,
+  Lock,
+  LogOut,
+  Trophy,
+  Users,
+} from "lucide-react";
 import Image from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
@@ -16,6 +23,7 @@ import {
   SidebarMenuItem,
 } from "@/components/ui/sidebar";
 import { useSignOut } from "@/lib/auth/use-sign-out";
+import { WHATSAPP_INVITE_URL } from "@/lib/event";
 
 type NavItem = {
   href: string;
@@ -122,6 +130,24 @@ export function AppSidebar({
                     <span className="sr-only">Locked</span>
                   </SidebarMenuButton>
                 )}
+              </SidebarMenuItem>
+
+              {/*
+                Not in `BASE_NAV`: that array is mapped through `next/link`
+                with pathname matching, and an off-site URL has neither a
+                route to match nor an active state.
+              */}
+              <SidebarMenuItem>
+                <SidebarMenuButton asChild>
+                  <a
+                    href={WHATSAPP_INVITE_URL}
+                    target="_blank"
+                    rel="noreferrer noopener"
+                  >
+                    <ExternalLink aria-hidden />
+                    <span>WhatsApp</span>
+                  </a>
+                </SidebarMenuButton>
               </SidebarMenuItem>
             </SidebarMenu>
           </SidebarGroupContent>

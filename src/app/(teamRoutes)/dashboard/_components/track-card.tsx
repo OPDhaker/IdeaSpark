@@ -7,7 +7,7 @@ type State = NonNullable<Awaited<ReturnType<typeof getSubmissionState>>>;
 /** Constant across every state: who you are and what you're working against. */
 export function TrackCard({ state }: { state: State }) {
   return (
-    <DashCard>
+    <DashCard className="flex flex-col gap-6 justify-between">
       <CardTitle>Track details</CardTitle>
 
       <dl className="mt-6 flex flex-col gap-5">

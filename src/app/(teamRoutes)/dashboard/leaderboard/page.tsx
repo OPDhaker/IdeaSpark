@@ -8,7 +8,7 @@ import { CardBody, CardTitle, DashCard } from "../_components/panel";
 export const dynamic = "force-dynamic";
 
 export const metadata = {
-  title: "Leaderboard — IdeaSpark 3.0",
+  title: "Leaderboard | IdeaSpark 3.0",
 };
 
 /** Ties share a rank: 1, 2, 2, 4. */
@@ -122,7 +122,7 @@ export default async function LeaderBoardPage() {
                         {row.trackName ? (
                           <Badge variant="outline">{row.trackName}</Badge>
                         ) : (
-                          <span className="text-muted-foreground">—</span>
+                          <span className="text-muted-foreground">|</span>
                         )}
                       </td>
                       <td className="px-6 py-4 text-right tabular-nums">
