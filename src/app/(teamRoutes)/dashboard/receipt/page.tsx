@@ -10,7 +10,7 @@ import "./receipt.css";
 export const dynamic = "force-dynamic";
 
 export const metadata = {
-  title: "Passes — IdeaSpark 3.0",
+  title: "Passes | IdeaSpark 3.0",
 };
 
 function money(amount: string) {
@@ -86,11 +86,11 @@ export default async function ReceiptPage() {
 
           <div className="flex flex-col gap-1.5">
             <Line label="TEAM" value={receipt.team.teamName} />
-            <Line label="TRACK" value={receipt.trackName ?? "—"} />
+            <Line label="TRACK" value={receipt.trackName ?? "|"} />
             {receipt.dayOne ? (
               <Line
                 label="DAYS"
-                value={`${receipt.dayOne} / ${receipt.dayTwo ?? "—"}`}
+                value={`${receipt.dayOne} / ${receipt.dayTwo ?? "|"}`}
               />
             ) : null}
           </div>
@@ -102,12 +102,12 @@ export default async function ReceiptPage() {
               <Line label="ORDER" value={receipt.payment.razorpayOrderId} />
               <Line
                 label="PAYMENT"
-                value={receipt.payment.razorpayPaymentId ?? "—"}
+                value={receipt.payment.razorpayPaymentId ?? "|"}
               />
               <Line
                 label="PAID"
                 value={
-                  receipt.payment.paidAt ? moment(receipt.payment.paidAt) : "—"
+                  receipt.payment.paidAt ? moment(receipt.payment.paidAt) : "|"
                 }
               />
               <div className="mt-2 flex items-baseline justify-between gap-4 font-semibold">
@@ -156,7 +156,7 @@ export default async function ReceiptPage() {
                   </>
                 ) : (
                   <p className="text-center opacity-60">
-                    Pass not issued yet — refresh in a moment.
+                    Pass not issued yet | refresh in a moment.
                   </p>
                 )}
 

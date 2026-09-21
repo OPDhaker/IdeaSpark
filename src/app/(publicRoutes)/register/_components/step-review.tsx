@@ -28,7 +28,7 @@ function Row({ label, value }: { label: string; value: string }) {
     <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-0.5 py-1.5">
       <dt className="text-muted-foreground text-sm">{label}</dt>
       <dd className="text-right font-medium text-foreground text-sm break-all">
-        {value || <span className="text-muted-foreground">—</span>}
+        {value || <span className="text-muted-foreground">|</span>}
       </dd>
     </div>
   );

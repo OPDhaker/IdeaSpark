@@ -4,7 +4,7 @@ import { LeaderboardToggle } from "./leaderboard-toggle";
 export const dynamic = "force-dynamic";
 
 export const metadata = {
-  title: "Event controls — IdeaSpark 3.0",
+  title: "Event controls | IdeaSpark 3.0",
 };
 
 export default async function AdminEventPage() {

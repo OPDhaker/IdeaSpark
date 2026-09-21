@@ -9,7 +9,7 @@ import { RegistrationForm } from "./_components/registration-form";
 export const dynamic = "force-dynamic";
 
 export const metadata = {
-  title: "Register — IdeaSpark 3.0",
+  title: "Register | IdeaSpark 3.0",
 };
 
 function Notice({ title, body }: { title: string; body: string }) {

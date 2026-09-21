@@ -6,7 +6,7 @@ import { GoogleSignIn } from "./_components/google-sign-in";
 export const dynamic = "force-dynamic";
 
 export const metadata = {
-  title: "Log In — IdeaSpark 3.0",
+  title: "Log In | IdeaSpark 3.0",
 };
 
 /** `getMyTeam` throws when there is no session; `/login` is the one route that

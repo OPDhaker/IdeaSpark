@@ -41,7 +41,7 @@ export default async function PanelLeaderboardPage({
           </h1>
           <p className="mt-3 text-muted-foreground text-sm">
             Each team&apos;s panel average, per criterion, out of {SCORE_MAX}.
-            Live — no waiting for the event to open.
+            Live | no waiting for the event to open.
           </p>
         </header>
 

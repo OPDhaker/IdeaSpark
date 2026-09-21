@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 export const dynamic = "force-dynamic";
 
 export const metadata = {
-  title: "Judging Panel — IdeaSpark 3.0",
+  title: "Judging Panel | IdeaSpark 3.0",
 };
 
 function formatDay(day: string) {

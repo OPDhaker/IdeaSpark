@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import { LegalPage } from "@/components/legal/legal-page";
 
 export const metadata: Metadata = {
-  title: "Privacy Policy — IdeaSpark 3.0",
+  title: "Privacy Policy | IdeaSpark 3.0",
   description: "How IdeaSpark 3.0 collects and uses participant data.",
 };
 

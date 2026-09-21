@@ -7,7 +7,7 @@ import { PlaybookToc } from "./_components/toc";
 import "./typeset.css";
 
 export const metadata: Metadata = {
-  title: "Playbook — IdeaSpark 3.0",
+  title: "Playbook | IdeaSpark 3.0",
   description:
     "Everything you need for IdeaSpark 3.0: dates, schedule, eligibility, rules, judging, prizes, FAQ and contacts.",
 };
