@@ -37,6 +37,7 @@
   --sidebar-ring: oklch(0.4806 0.0815 140.0625);
   --font-sans: var(--font-inter-sans);
   --font-serif: var(--font-instrument-serif);
+  
   /* shadcn/typeset (used by /playbook) reads --font-heading and
      --font-mono. One typeface across the site, so headings are Inter;
      mono is a system stack and downloads nothing. */
@@ -105,6 +106,7 @@
   --sidebar-border: oklch(0.2986 0.0098 80.6526);
   --sidebar-ring: oklch(0.6211 0.0906 139.7694);
   --font-sans: var(--font-inter-sans);
+  
   --font-serif: var(--font-instrument-serif);
   --radius: 0.35rem;
   --shadow-x: 0px;
@@ -164,6 +166,7 @@
 
   --font-sans: var(--font-inter-sans);
   --font-serif: var(--font-instrument-serif);
+  
   --font-heading: var(--font-heading);
   --font-mono: var(--font-mono);
 

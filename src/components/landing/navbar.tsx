@@ -79,7 +79,7 @@ export function Navbar({ ctaState }: { ctaState: CtaState }) {
                 disabled={pending}
                 aria-label="Sign out"
                 title="Sign out"
-                className="hidden size-11 items-center justify-center rounded-full text-foreground transition-colors hover:bg-foreground/10 disabled:opacity-60 md:flex"
+                className="hidden size-12 items-center justify-center rounded-full text-destructive bg-destructive/20 transition-colors hover:bg-destructive/30 disabled:opacity-60 md:flex"
               >
                 <LogOut aria-hidden className="size-5" />
               </button>
