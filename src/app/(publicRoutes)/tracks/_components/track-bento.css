@@ -1,0 +1,106 @@
+/* MagicBento (reactbits.dev), rebuilt for this repo: the glow reads the
+ * `--primary` token instead of the original's RGB-string prop, the cards are
+ * light, and the motion is anime.js (see `track-bento.tsx`). Only the pieces
+ * Tailwind utilities cannot express live here — the masked border ring, the
+ * spotlight blend mode and the title clamp. Everything is scoped to
+ * `.track-*`; deliberately no `:root` block, so none of the original's globals
+ * leak into the app. */
+
+.track-card {
+  --glow-x: 50%;
+  --glow-y: 50%;
+  --glow-intensity: 0;
+  --glow-radius: 200px;
+  --clamp-title: 2;
+}
+
+/* The ring: a radial gradient painted across the whole card, then masked down
+ * to just its 2px padding box so only the border lights up. */
+.track-card--glow::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  padding: 3px;
+  border-radius: inherit;
+  background: radial-gradient(
+    var(--glow-radius) circle at var(--glow-x) var(--glow-y),
+    color-mix(
+        in oklab,
+        var(--primary) calc(var(--glow-intensity) * 90%),
+        transparent
+      )
+      0%,
+    color-mix(
+        in oklab,
+        var(--primary) calc(var(--glow-intensity) * 45%),
+        transparent
+      )
+      30%,
+    transparent 60%
+  );
+  -webkit-mask:
+    linear-gradient(#fff 0 0) content-box,
+    linear-gradient(#fff 0 0);
+  -webkit-mask-composite: xor;
+  mask:
+    linear-gradient(#fff 0 0) content-box,
+    linear-gradient(#fff 0 0);
+  mask-composite: exclude;
+  pointer-events: none;
+  z-index: 1;
+}
+
+.track-card--glow:hover {
+  box-shadow:
+    0 4px 20px color-mix(in oklab, var(--foreground) 8%, transparent),
+    0 0 30px color-mix(in oklab, var(--primary) 12%, transparent);
+}
+
+.track-ripple {
+  position: absolute;
+  border-radius: 50%;
+  pointer-events: none;
+  z-index: 3;
+  background: radial-gradient(
+    circle,
+    color-mix(in oklab, var(--primary) 28%, transparent) 0%,
+    color-mix(in oklab, var(--primary) 14%, transparent) 30%,
+    transparent 70%
+  );
+}
+
+/* Fixed to the viewport, follows the cursor. The original blends with `screen`,
+ * which is invisible on this light background — `multiply` tints instead. */
+.track-spotlight {
+  position: fixed;
+  width: 800px;
+  height: 800px;
+  border-radius: 50%;
+  pointer-events: none;
+  opacity: 0;
+  z-index: 30;
+  top: 0;
+  left: 0;
+  /* Centred on the cursor by margin rather than a translate, so anime.js owns
+   * the element's `transform` outright and nothing fights over it. */
+  margin: -400px 0 0 -400px;
+  mix-blend-mode: multiply;
+  will-change: transform, opacity;
+  background: radial-gradient(
+    circle,
+    color-mix(in oklab, var(--primary) 26%, transparent) 0%,
+    color-mix(in oklab, var(--primary) 16%, transparent) 15%,
+    color-mix(in oklab, var(--primary) 9%, transparent) 25%,
+    color-mix(in oklab, var(--primary) 4%, transparent) 40%,
+    transparent 70%
+  );
+}
+
+.track-card--clamp .track-card__title {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  -webkit-line-clamp: var(--clamp-title);
+  line-clamp: var(--clamp-title);
+}

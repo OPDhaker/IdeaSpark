@@ -140,7 +140,7 @@ Known breakage and duplication — fix these rather than building around them:
 - **`src/db/queries.ts` overlaps `actions.ts`** (`getDepartments`, `getActiveTracks` vs `getTracks`). Route the remaining reads through it or drop the duplicates.
 - **`better-auth` is in `package.json` but unused** — auth goes through `@neondatabase/auth`.
 - **`src/lib/index.ts` is a pointless re-export** of `@/db`; import from `@/db` directly.
-- **Stub pages**: `/tracks` and `/event-details` still return placeholder `<div>`s.
+- **Stub page**: `/event-details` has no `page.tsx` at all — the route is gone until the copy lands.
 - `src/app/globals.css` defines `--font-sans: var(--font-sans)` (self-referential); the real font vars from `layout.tsx` are `--font-inter-sans` and `--font-instrument-serif`.
 - No sign-out anywhere in the app, and the navbar still reads "Log In" for an already signed-in user.
 - `getAdminReviewData` hands **every admin role, including `volunteer`, every score row**. It should return only what the caller's role needs.
