@@ -8,13 +8,20 @@ import {
   tracks,
 } from "../src/db/schema";
 import { OFFICIAL_DEPARTMENTS } from "../src/db/seed-departments";
+import { OFFICIAL_TRACKS } from "../src/db/seed-tracks";
 
 const departmentRows = OFFICIAL_DEPARTMENTS;
 
-const trackRows = (process.env.IDEASPARK_TRACKS ?? "")
+// `IDEASPARK_TRACKS` stays as an override for a throwaway branch; unset, the
+// real list seeds.
+const envTracks = (process.env.IDEASPARK_TRACKS ?? "")
   .split(",")
   .map((x) => x.trim())
   .filter(Boolean);
+
+const trackNames: string[] = envTracks.length
+  ? envTracks
+  : [...OFFICIAL_TRACKS];
 
 await db.transaction(async (tx) => {
   await tx
@@ -22,10 +29,12 @@ await db.transaction(async (tx) => {
     .values(departmentRows.map(([code, label]) => ({ code, label })))
     .onConflictDoNothing();
 
-  if (trackRows.length) {
+  if (trackNames.length) {
     await tx
       .insert(tracks)
-      .values(trackRows.map((name) => ({ name, isActive: true })))
+      .values(trackNames.map((name) => ({ name, isActive: true })))
+      // A track is only its name now, and the name is the conflict target, so
+      // re-seeding has nothing left to update.
       .onConflictDoNothing();
   }
 

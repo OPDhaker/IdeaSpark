@@ -479,7 +479,7 @@ export async function getSubmissionState() {
         .limit(1),
       team.trackId
         ? db
-            .select({ name: tracks.name, description: tracks.description })
+            .select({ name: tracks.name })
             .from(tracks)
             .where(eq(tracks.id, team.trackId))
             .limit(1)
@@ -509,7 +509,6 @@ export async function getSubmissionState() {
     teamStatus: team.status,
     paymentStatus: team.paymentStatus,
     trackName: track?.name ?? null,
-    trackDescription: track?.description ?? null,
     memberCount,
     activeRound: activeRound ?? null,
     submission: submission ?? null,

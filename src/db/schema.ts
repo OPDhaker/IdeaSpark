@@ -55,7 +55,6 @@ export const adminRoleEnum = pgEnum("admin_role_enum", [
 export const tracks = pgTable("tracks", {
   id: uuid().defaultRandom().primaryKey(),
   name: varchar({ length: 255 }).notNull().unique(),
-  description: text(),
   isActive: boolean("is_active").notNull().default(true),
   createdAt: timestamp("created_at", { withTimezone: true })
     .notNull()
