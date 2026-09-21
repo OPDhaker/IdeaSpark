@@ -28,7 +28,7 @@ export default async function LoginPage() {
     <main className="flex min-h-dvh gap-2 bg-background p-2">
       <div className="relative hidden overflow-hidden rounded-2xl md:block md:w-[42%]">
         <Image
-          src="/landing/footer.webp"
+          src="/landing/login-image.jpg"
           alt=""
           fill
           priority

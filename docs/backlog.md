@@ -119,3 +119,21 @@ If case-**insensitive** is what's wanted:
 - `uniqueViolationConstraint` matches by substring, so a new constraint name
   containing `team_name` keeps the friendly field error working.
 - Store the name as typed — only the comparison folds case.
+
+## 7. `next/image` pointed at an unconfigured remote host
+
+`src/app/(teamRoutes)/dashboard/_components/submit-form.tsx:73` renders the
+Google Drive mark from `https://thesvg.org/icons/google-drive-2026/default.svg`,
+but `next.config.ts` declares no `images.remotePatterns`. `next/image` refuses
+any remote host that is not listed and throws at render:
+
+> Invalid src prop (…) on `next/image`, hostname "thesvg.org" is not configured
+> under images in your `next.config.js`
+
+(`node_modules/next/dist/shared/lib/image-loader.js:101`.) So the submit card is
+broken wherever it renders.
+
+The login button had the same bug and was fixed by inlining the mark as an SVG
+component (`src/app/(publicRoutes)/login/_components/google-mark.tsx`) — no
+network hop, no layout shift, and no config surface to keep in sync. Do the same
+here rather than whitelisting the host.
