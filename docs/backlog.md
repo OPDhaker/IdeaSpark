@@ -83,13 +83,15 @@ Left over: the track icons are a name-keyed map in `track-bento.tsx` because
 
 ## 5. Real event details on `/event-details` — BLOCKED
 
-`src/app/(publicRoutes)/event-details/page.tsx` is a placeholder.
+There is no `src/app/(publicRoutes)/event-details/page.tsx` — the route does not
+exist, and nothing links to it.
 
 **Blocked on Vansh sending the copy.** Nothing to build until then.
 
-When it arrives: the playbook mirrors the same facts in two places —
-`src/app/(publicRoutes)/playbook/_components/article.tsx` **and**
-`_content/playbook.md`. Update both, plus this page, or they drift.
+When it arrives: `/playbook` already carries the same facts, sourced from
+`public/IDEASPARK 3.docx`, in a single file —
+`src/app/(publicRoutes)/playbook/page.mdx`. Update that and this page together,
+or they drift.
 
 ---
 

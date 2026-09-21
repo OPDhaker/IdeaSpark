@@ -1,7 +1,7 @@
 # IdeaSpark 3.0 Playbook
 
-> IdeaSpark 3.0 is a two-day ideathon on 5 and 6 October, run by the Founders Club at SRM Institute of Science and Technology. Values marked TODO are unconfirmed.
+> IdeaSpark 3.0 is a two-day entrepreneurship ideathon on 5 and 6 October 2026 at Faraday Hall and Mini Hall 1, run by the Founders Club at SRM Institute of Science and Technology. Teams of 2 to 4 pitch and are evaluated on Day 1; the shortlisted Top 15 return for Triumph Talk XI and the Grand Final on Day 2.
 
 ## Playbook
 
-- [Playbook](playbook.md): Dates, schedule, eligibility, rules, judging, prizes, FAQ and contact details.
+- [Playbook](playbook.md): Dates, venue, tracks, the full two-day schedule, the Founder Simulation rules, the judging rubric out of 50, prizes, FAQ and contacts.

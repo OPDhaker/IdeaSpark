@@ -38,10 +38,15 @@ export default async function PlaybookLayout({
       <main className="mx-auto w-full max-w-section flex-1 px-6 pt-32 pb-24 md:px-16">
         <div className="grid gap-x-12 gap-y-8 lg:grid-cols-[minmax(0,1fr)_14rem]">
           <div className="min-w-0">
+            {/* Above the article, not below it: the point of these is handing
+                the page to a model, and nobody should read 1,500 words first. */}
+            <div className="mb-6 flex justify-end">
+              <PlaybookActions />
+            </div>
+
             <article id="playbook-article" className="typeset">
               {children}
             </article>
-            <PlaybookActions />
           </div>
 
           <aside className="order-first lg:order-none lg:sticky lg:top-28 lg:self-start">

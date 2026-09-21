@@ -116,6 +116,20 @@ function heading(Tag: "h2" | "h3") {
   };
 }
 
+/**
+ * typeset ships `.typeset-scroll` for wide blocks, but markdown has no way to
+ * put a class on the `<table>` it generates. Wrapping every table here is what
+ * keeps a wide one (the judging rubric) scrollable on a phone instead of
+ * squeezed into unreadable columns.
+ */
+function Table({ children, ...props }: ComponentProps<"table">) {
+  return (
+    <div className="typeset-scroll">
+      <table {...props}>{children}</table>
+    </div>
+  );
+}
+
 function Anchor({ href = "", children, ...props }: ComponentProps<"a">) {
   if (href.startsWith("/") || href.startsWith("#")) {
     return (
@@ -137,6 +151,7 @@ const components: MDXComponents = {
   blockquote: Blockquote,
   h2: heading("h2"),
   h3: heading("h3"),
+  table: Table,
 };
 
 export function useMDXComponents(): MDXComponents {

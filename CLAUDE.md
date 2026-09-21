@@ -56,7 +56,7 @@ Groups map to audiences, and to the `proxy.ts` matcher:
 
 | Group | Routes | Audience |
 |---|---|---|
-| `(publicRoutes)` | `/login`, `/tracks`, `/event-details`, `/playbook` | anyone |
+| `(publicRoutes)` | `/login`, `/tracks`, `/playbook` | anyone |
 | `(publicRoutes)`, gated | `/register` | signed-in, teamless (redirects to `/dashboard` once a team exists) |
 | `(teamRoutes)` | `/dashboard`, `/dashboard/team-details`, `/dashboard/leaderboard` | signed-in team leader |
 | `(panelRoutes)` | `/panel`, `/panel/[round]`, `/panel/[round]/leaderboard` | evaluators |
@@ -129,13 +129,12 @@ A sidebar shell in `admin/layout.tsx`, matching `/dashboard` and `/panel`. The l
 - `/admin/event` — the leaderboard publish switch. `super_admin`.
 
 ### Playbook (`/playbook`)
-A self-contained mini-site: its own theme (`playbook-theme.tsx`), `typeset.css`, sidebar/TOC/toolbar in `_components/`, and text mirrors in `_content/` served as plaintext at `/playbook/playbook.md` and `/playbook/llms.txt`. Editing event details means updating **both** `_components/article.tsx` and `_content/playbook.md`. See its own `README.md`.
+A self-contained mini-site: vendored `typeset.css`, a TOC and a "Copy page" toolbar in `_components/`. **`page.mdx` is the only copy of the content** — it is plain GFM with no imports, exports or JSX, so `playbook.md/route.ts` serves that same file at `/playbook/playbook.md`; only `_content/llms.txt` is a separate, hand-written index. The copy comes from `public/IDEASPARK 3.docx`, which is what to reconcile against when event details change. See its own `README.md`.
 
 ## Cleanup backlog
 
 Known breakage and duplication — fix these rather than building around them:
 
-- **`(publicRoutes)/playbook/` has both `page.tsx` and `page.mdx`** — a duplicate route for the same segment. One must go (`page.tsx` is the real implementation).
 - **`.env.example` says `DATABASE_DIRECT_URL`, `drizzle.config.ts` reads `DIRECT_DATABASE_URL`.** Pick one name and fix the other.
 - **`src/db/queries.ts` overlaps `actions.ts`** (`getDepartments`, `getActiveTracks` vs `getTracks`). Route the remaining reads through it or drop the duplicates.
 - **`better-auth` is in `package.json` but unused** — auth goes through `@neondatabase/auth`.
