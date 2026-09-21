@@ -188,6 +188,17 @@
   --shadow-2xl: var(--shadow-2xl);
 }
 
+/* No `tailwindcss-animate` in this project, and Tailwind v4 ships no fade
+   utility of its own — `src/app/loading.tsx` delays the loader with this. */
+@keyframes loader-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
 /* Radix ships shadcn's `data-[state=open]:animate-in` classes on
    `DropdownMenuContent`, but with no `tailwindcss-animate` they are inert —
    the Ask AI menu brings its own enter animation. */
