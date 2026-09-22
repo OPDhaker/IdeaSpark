@@ -1,4 +1,9 @@
 import { and, eq, sql } from "drizzle-orm";
+import {
+  MAX_MEMBERS,
+  MIN_MEMBERS,
+  TEAM_SIZE_RANGE_LABEL,
+} from "@/lib/team-size";
 import { db } from "./index";
 import {
   evaluationRounds,
@@ -53,7 +58,8 @@ export async function addMemberAtomically(
       .from(members)
       .where(eq(members.teamId, teamId));
 
-    if (memberCount >= 4) throw new Error("Team is full (max 4 members)");
+    if (memberCount >= MAX_MEMBERS)
+      throw new Error(`Team is full (max ${MAX_MEMBERS} members)`);
 
     if (input.isLeader) {
       const [leader] = await tx
@@ -115,8 +121,10 @@ export async function removeMemberAtomically(teamId: string, memberId: string) {
       .from(members)
       .where(eq(members.teamId, teamId));
 
-    if (memberCount <= 2)
-      throw new Error("A team must retain at least 2 members");
+    if (memberCount <= MIN_MEMBERS)
+      throw new Error(
+        `A team must retain at least ${MIN_MEMBERS} member${MIN_MEMBERS === 1 ? "" : "s"}`,
+      );
 
     await tx.delete(members).where(eq(members.id, memberId));
     return member;
@@ -130,8 +138,11 @@ export async function registerTeamWithMembers(input: {
   members: RegistrationMember[];
 }) {
   return db.transaction(async (tx) => {
-    if (input.members.length < 2 || input.members.length > 4) {
-      throw new Error("A team must contain 2 to 4 members");
+    if (
+      input.members.length < MIN_MEMBERS ||
+      input.members.length > MAX_MEMBERS
+    ) {
+      throw new Error(`A team must contain ${TEAM_SIZE_RANGE_LABEL} members`);
     }
 
     const leaders = input.members.filter((member) => member.isLeader);

@@ -32,13 +32,15 @@ import { log } from "@/lib/audit";
 import { auth } from "@/lib/auth/server";
 import { getAdminActor, requireAdminRole } from "@/lib/roles";
 import {
+  MAX_MEMBERS,
+  MIN_MEMBERS,
+  TEAM_SIZE_RANGE_LABEL,
+} from "@/lib/team-size";
+import {
   type RegistrationValues,
   registrationSchema,
   toRoster,
 } from "@/lib/validation/registration";
-
-const MIN_MEMBERS = 2;
-const MAX_MEMBERS = 4;
 
 type MemberInput = {
   name: string;
@@ -180,7 +182,7 @@ export async function createTeam(
 
   const roster = toRoster(parsed.data);
   if (roster.length < MIN_MEMBERS || roster.length > MAX_MEMBERS) {
-    throw new Error(`Team must contain ${MIN_MEMBERS}-${MAX_MEMBERS} members`);
+    throw new Error(`Team must contain ${TEAM_SIZE_RANGE_LABEL} members`);
   }
 
   const existingTeam = await getTeamFor(user.id);
@@ -418,7 +420,9 @@ export async function submitSubmission(
     .where(eq(members.teamId, team.id));
 
   if (memberCount < MIN_MEMBERS) {
-    throw new Error("At least 2 members are required to submit");
+    throw new Error(
+      `At least ${MIN_MEMBERS} member${MIN_MEMBERS === 1 ? " is" : "s are"} required to submit`,
+    );
   }
 
   if (!driveLink.trim()) throw new Error("A submission link is required");
