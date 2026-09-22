@@ -19,7 +19,7 @@ export default function TermsPage() {
       <h2>Eligibility</h2>
       <p>
         Participation is open to students of SRM Institute of Science and
-        Technology. Teams are 2 to 4 members with exactly one leader. Only the
+        Technology. Teams are 1 to 3 members with exactly one leader. Only the
         leader signs in and manages the team.
       </p>
 

@@ -89,8 +89,8 @@ Four distinct layers; keep them separate:
 `scripts/*.ts` run under `bun`, not `tsx`: tsx compiles them as CJS and both scripts use top-level `await`, which fails to transform.
 
 ### Business invariants (enforced in DB *and* transaction layer)
-- Team size 2–4; exactly one leader (`one_leader_per_team` partial unique index).
-- **Payment locks the roster** — `addMemberAtomically` / `removeMemberAtomically` reject once `teams.paymentStatus = 'paid'`. Removal also refuses to drop the leader or go below 2 members.
+- Team size 1–3, leader included; exactly one leader (`one_leader_per_team` partial unique index). `src/lib/team-size.ts` is the single source, and the ceiling is also enforced in Postgres by `team_member_limit_trigger`.
+- **Payment locks the roster** — `addMemberAtomically` / `removeMemberAtomically` reject once `teams.paymentStatus = 'paid'`. Removal also refuses to drop the leader or go below 1 member.
 - Attendance codes are minted **only on successful payment**, in one bulk `UPDATE … SET attendance_code = gen_random_uuid()` inside the payment transaction — never per-member in a loop.
 - Payment is gated on an `accepted` submission; amount always comes from `event_config.registrationFee`, never the client.
 - `event_config` is a singleton (`id = 1`, enforced by check constraint); at most one active `evaluation_rounds` row (partial unique index).
