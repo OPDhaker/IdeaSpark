@@ -7,11 +7,11 @@
  * Step map — `memberCount` includes the leader, so a team of N fills N+1 steps:
  *   1  leader              -> `leader`
  *   2  team                -> `team`
- *   3  member 1            -> `members.0`   (always present)
- *   4  member 2            -> `members.1`   (memberCount >= 3)
- *   5  member 3            -> `members.2`   (memberCount === 4)
+ *   3  member 1            -> `members.0`   (memberCount >= 2)
+ *   4  member 2            -> `members.1`   (memberCount === 3)
  */
 import { z } from "zod";
+import { MAX_MEMBERS, MIN_MEMBERS } from "@/lib/team-size";
 import {
   departmentCodeSchema,
   facultyEmailSchema,
@@ -24,9 +24,6 @@ import {
   teamNameSchema,
   trackIdSchema,
 } from "./primitives";
-
-export const MIN_MEMBERS = 2;
-export const MAX_MEMBERS = 4;
 
 /** The eight NOT NULL columns of `members`, in display order. */
 export const MEMBER_FIELDS = [
@@ -55,8 +52,8 @@ export const memberSchema = z.object({
 export type MemberValues = z.infer<typeof memberSchema>;
 
 /**
- * What the inputs actually hold while typing. Member slots 2 and 3 stay mounted
- * in form state even when unused, so the base schema must tolerate blanks —
+ * What the inputs actually hold while typing. Every member slot stays mounted in
+ * form state even when unused, so the base schema must tolerate blanks —
  * the real per-field checks run in `superRefine` for active slots only.
  */
 const memberDraftSchema = z.object(
@@ -146,7 +143,7 @@ export type RegistrationValues = z.infer<typeof registrationSchema>;
 
 /**
  * Total steps for a team size: leader + team + one per non-leader member,
- * then a final review step. A team of 2 fills 4 steps, a team of 4 fills 6.
+ * then a final review step. A solo leader fills 3 steps, a team of 3 fills 5.
  */
 export function totalSteps(memberCount: number) {
   return memberCount + 2;
@@ -160,10 +157,10 @@ export function isReviewStep(step: number, memberCount: number) {
 /**
  * RHF paths to validate before advancing past `step` (1-based).
  *
- * `memberCount` is required because all three member slots exist in form state
- * at every team size — only the step layout says which are in use. Without it,
- * the review step of a 2-person team would resolve to `members.1.*` and
- * validate a blank slot that is never submitted.
+ * `memberCount` is required because every member slot exists in form state at
+ * every team size — only the step layout says which are in use. Without it, the
+ * review step of a solo team would resolve to `members.0.*` and validate a
+ * blank slot that is never submitted.
  */
 export function fieldsForStep(step: number, memberCount: number): string[] {
   if (step === 1) return MEMBER_FIELDS.map((field) => `leader.${field}`);

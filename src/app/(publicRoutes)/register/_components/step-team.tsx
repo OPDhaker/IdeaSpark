@@ -13,11 +13,8 @@ import {
   NativeSelect,
   NativeSelectOption,
 } from "@/components/ui/native-select";
-import {
-  MAX_MEMBERS,
-  MIN_MEMBERS,
-  type RegistrationValues,
-} from "@/lib/validation/registration";
+import { MAX_MEMBERS, MIN_MEMBERS } from "@/lib/team-size";
+import type { RegistrationValues } from "@/lib/validation/registration";
 
 export type Track = { id: string; name: string };
 
@@ -44,7 +41,7 @@ export function StepTeam({
           <FormItem className="sm:col-span-2">
             <FormLabel className="font-semibold">Team name</FormLabel>
             <FormControl>
-              <Input placeholder="The Founding Four" {...field} />
+              <Input placeholder="The Founding Few" {...field} />
             </FormControl>
             <FormMessage />
           </FormItem>
@@ -72,7 +69,7 @@ export function StepTeam({
               >
                 {counts.map((count) => (
                   <NativeSelectOption key={count} value={String(count)}>
-                    {count} members
+                    {count} {count === 1 ? "member" : "members"}
                   </NativeSelectOption>
                 ))}
               </NativeSelect>

@@ -9,11 +9,11 @@ import { createTeam } from "@/app/actions";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Form } from "@/components/ui/form";
+import { MAX_MEMBERS, MIN_MEMBERS } from "@/lib/team-size";
 import {
   emptyMember,
   fieldsForStep,
   isReviewStep,
-  MAX_MEMBERS,
   type RegistrationValues,
   registrationSchema,
   totalSteps,
@@ -35,12 +35,17 @@ const STEP_LABELS = [
   "Team details",
   "Member 2 details",
   "Member 3 details",
-  "Member 4 details",
 ];
 const REVIEW_LABEL = "Review & submit";
 
 function labelsFor(total: number) {
   return [...STEP_LABELS.slice(0, total - 1), REVIEW_LABEL];
+}
+
+/** A team size from anywhere untrusted — a stale draft — pulled back in range. */
+function clampCount(count: unknown) {
+  if (typeof count !== "number" || !Number.isFinite(count)) return MIN_MEMBERS;
+  return Math.min(Math.max(Math.round(count), MIN_MEMBERS), MAX_MEMBERS);
 }
 
 /** Which step owns a given RHF path, so a server error can jump the wizard. */
@@ -71,7 +76,7 @@ export function RegistrationForm({
     mode: "onTouched",
     defaultValues: {
       leader: { ...emptyMember(), name: defaultLeaderName },
-      team: { memberCount: 2, teamName: "", trackId: "" },
+      team: { memberCount: MIN_MEMBERS, teamName: "", trackId: "" },
       members: Array.from({ length: MEMBER_SLOTS }, emptyMember),
     },
   });
@@ -91,10 +96,13 @@ export function RegistrationForm({
       form.reset({
         leader: { ...emptyMember(), name: defaultLeaderName, ...draft.leader },
         team: {
-          memberCount: 2,
           teamName: "",
           trackId: "",
           ...draft.team,
+          // A draft saved before the size rule changed can still hold a count
+          // the wizard no longer has steps for, which would wedge submission on
+          // a slot the user cannot reach.
+          memberCount: clampCount(draft.team?.memberCount),
         },
         members: Array.from({ length: MEMBER_SLOTS }, (_, index) => ({
           ...emptyMember(),

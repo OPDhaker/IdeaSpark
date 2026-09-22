@@ -123,7 +123,7 @@ export function StepReview({
         />
         <Row
           label="Team size"
-          value={`${values.team.memberCount} members (including you)`}
+          value={`${values.team.memberCount} ${values.team.memberCount === 1 ? "member" : "members"} (including you)`}
         />
       </Section>
 

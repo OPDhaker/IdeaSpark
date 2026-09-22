@@ -65,7 +65,7 @@ function PhoneInput({
 
 /**
  * The eight `members` columns, rendered for whichever slot `prefix` points at
- * (`leader` or `members.0` … `members.2`). Every member carries their own
+ * (`leader` or `members.0` … `members.1`). Every member carries their own
  * faculty advisor, so the faculty block repeats per person.
  */
 export function MemberFields({
