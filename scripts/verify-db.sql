@@ -18,3 +18,10 @@ WHERE schemaname = 'public'
     'scores_team_round_evaluator_unique'
   )
 ORDER BY indexname;
+
+SELECT tgname
+FROM pg_trigger t
+JOIN pg_class c ON c.oid = t.tgrelid
+WHERE c.relname = 'members'
+  AND NOT t.tgisinternal
+ORDER BY tgname;
