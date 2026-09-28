@@ -2,7 +2,10 @@ import { eq } from "drizzle-orm";
 import { NextResponse } from "next/server";
 import { db } from "@/db";
 import { payments } from "@/db/schema";
-import { markPaymentPaidByOrderAtomically } from "@/db/transactions";
+import {
+  markPaymentFailedByOrderAtomically,
+  markPaymentPaidByOrderAtomically,
+} from "@/db/transactions";
 import { verifyRazorpayWebhookSignature } from "@/lib/razorpay";
 
 export const runtime = "nodejs";
@@ -38,6 +41,8 @@ export async function POST(request: Request) {
           id?: string;
           order_id?: string;
           status?: string;
+          amount?: number;
+          currency?: string;
         };
       };
     };
@@ -57,8 +62,11 @@ export async function POST(request: Request) {
   const orderId = entity?.order_id;
   const paymentId = entity?.id;
 
-  // We only finalize a payment after Razorpay reports a captured payment.
-  if (event === "payment.captured" && orderId && paymentId) {
+  if (
+    (event === "payment.captured" || event === "payment.failed") &&
+    orderId &&
+    paymentId
+  ) {
     const [knownPayment] = await db
       .select({ id: payments.id })
       .from(payments)
@@ -67,11 +75,33 @@ export async function POST(request: Request) {
 
     // Unknown orders are acknowledged without mutating state.
     if (knownPayment) {
-      await markPaymentPaidByOrderAtomically({
-        razorpayOrderId: orderId,
-        razorpayPaymentId: paymentId,
-        razorpaySignature: signature,
-      });
+      if (event === "payment.captured") {
+        const amountPaise = entity.amount;
+        if (
+          entity?.currency !== "INR" ||
+          typeof amountPaise !== "number" ||
+          !Number.isSafeInteger(amountPaise) ||
+          amountPaise <= 0
+        ) {
+          return NextResponse.json(
+            { error: "Invalid captured payment details" },
+            { status: 400 },
+          );
+        }
+
+        await markPaymentPaidByOrderAtomically({
+          razorpayOrderId: orderId,
+          razorpayPaymentId: paymentId,
+          razorpaySignature: signature,
+          amountPaise,
+        });
+      } else {
+        await markPaymentFailedByOrderAtomically({
+          razorpayOrderId: orderId,
+          razorpayPaymentId: paymentId,
+          razorpaySignature: signature,
+        });
+      }
     }
   }
 

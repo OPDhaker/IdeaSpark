@@ -1,4 +1,17 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
+import Razorpay from "razorpay";
+
+export function getRazorpayClient() {
+  const keyId = process.env.RAZORPAY_KEY_ID;
+  const keySecret = process.env.RAZORPAY_KEY_SECRET;
+  if (!keyId || !keySecret)
+    throw new Error("Razorpay API keys are not configured");
+
+  return {
+    client: new Razorpay({ key_id: keyId, key_secret: keySecret }),
+    keyId,
+  };
+}
 
 function safeEqualHex(expected: string, received: string) {
   const expectedBuffer = Buffer.from(expected, "utf8");

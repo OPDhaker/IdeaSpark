@@ -2,7 +2,6 @@ import { and, eq } from "drizzle-orm";
 import { NextResponse } from "next/server";
 import { db } from "@/db";
 import { payments, teams } from "@/db/schema";
-import { markPaymentPaidAtomically } from "@/db/transactions";
 import { auth } from "@/lib/auth/server";
 import { verifyRazorpayPaymentSignature } from "@/lib/razorpay";
 
@@ -84,15 +83,8 @@ export async function POST(request: Request) {
     );
   }
 
-  const finalized = await markPaymentPaidAtomically({
-    teamId: payment.teamId,
-    paymentId: payment.id,
-    razorpayPaymentId: paymentId,
-    razorpaySignature: signature,
-  });
-
   return NextResponse.json({
-    status: finalized.status,
-    paymentId: finalized.id,
+    status: payment.status,
+    confirmed: payment.status === "paid",
   });
 }
