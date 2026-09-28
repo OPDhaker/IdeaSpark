@@ -1,6 +1,7 @@
 import { PartyPopper, Ticket } from "lucide-react";
 import Link from "next/link";
 import type { getSubmissionState } from "@/app/actions";
+import { PaymentCheckout } from "@/components/dashboard/payment-checkout";
 import { Button } from "@/components/ui/button";
 import { formatMoment } from "./format";
 import { CardBody, CardTitle, DashCard } from "./panel";
@@ -81,16 +82,13 @@ export function ActionCard({ state }: { state: State }) {
           </p>
         ) : null}
 
-        {/* Razorpay order creation does not exist yet — nothing calls the
-            orders API and the SDK is not a dependency, so there is no order to
-            open a checkout against. The button stays visibly disabled rather
-            than failing on click. */}
-        <Button type="button" className="mt-6 w-full" disabled>
-          Pay registration fee
-        </Button>
-        <p className="mt-2 text-center text-muted-foreground text-xs">
-          Payments open shortly; we&apos;ll WhatsApp you the moment they do.
-        </p>
+        {Number(state.registrationFee) > 0 ? (
+          <PaymentCheckout />
+        ) : (
+          <p className="mt-6 text-center text-muted-foreground text-sm">
+            Online payment is temporarily unavailable.
+          </p>
+        )}
       </DashCard>
     );
   }

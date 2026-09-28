@@ -1,4 +1,5 @@
 import { and, eq, sql } from "drizzle-orm";
+import { rupeesToPaise } from "@/lib/money";
 import {
   MAX_MEMBERS,
   MIN_MEMBERS,
@@ -295,6 +296,7 @@ export async function markPaymentPaidByOrderAtomically(input: {
   razorpayOrderId: string;
   razorpayPaymentId: string;
   razorpaySignature: string;
+  amountPaise: number;
   paidAt?: Date;
 }) {
   return db.transaction(async (tx) => {
@@ -307,6 +309,9 @@ export async function markPaymentPaidByOrderAtomically(input: {
 
     if (!payment) throw new Error("Payment order not found");
     if (payment.status === "paid") return payment;
+    if (rupeesToPaise(payment.amount) !== input.amountPaise) {
+      throw new Error("Captured payment amount does not match the order");
+    }
 
     const [updatedPayment] = await tx
       .update(payments)
@@ -338,6 +343,37 @@ export async function markPaymentPaidByOrderAtomically(input: {
         AND attendance_code IS NULL
     `);
 
+    return updatedPayment;
+  });
+}
+
+export async function markPaymentFailedByOrderAtomically(input: {
+  razorpayOrderId: string;
+  razorpayPaymentId: string;
+  razorpaySignature: string;
+}) {
+  return db.transaction(async (tx) => {
+    const [payment] = await tx
+      .select()
+      .from(payments)
+      .where(eq(payments.razorpayOrderId, input.razorpayOrderId))
+      .for("update")
+      .limit(1);
+
+    if (!payment) throw new Error("Payment order not found");
+    if (payment.status === "paid") return payment;
+
+    const [updatedPayment] = await tx
+      .update(payments)
+      .set({
+        status: "failed",
+        razorpayPaymentId: input.razorpayPaymentId,
+        razorpaySignature: input.razorpaySignature,
+      })
+      .where(eq(payments.id, payment.id))
+      .returning();
+
+    if (!updatedPayment) throw new Error("Failed to record payment failure");
     return updatedPayment;
   });
 }

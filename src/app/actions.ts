@@ -20,7 +20,6 @@ import {
 } from "@/db/schema";
 import {
   addMemberAtomically,
-  createPaymentRecord,
   overrideTeamStatusAtomically,
   type ReviewStatus,
   registerTeamWithMembers,
@@ -681,35 +680,6 @@ export async function getLeaderboardView() {
     rows,
     myTeamId: team?.id ?? null,
   };
-}
-
-export async function createPaymentOrderRecord(razorpayOrderId: string) {
-  const user = await requireLead();
-  const team = await getTeamFor(user.id);
-  if (!team) throw new Error("Create your team first");
-
-  // `teams.status` mirrors the submission verdict (written in the same
-  // transaction), so the team row already in hand is the gate.
-  if (team.status !== "accepted") {
-    throw new Error("Payment is available only after acceptance");
-  }
-
-  const [cfg] = await db
-    .select()
-    .from(eventConfig)
-    .where(eq(eventConfig.id, 1))
-    .limit(1);
-  if (!cfg) throw new Error("Event configuration is not initialized");
-
-  const payment = await createPaymentRecord({
-    teamId: team.id,
-    razorpayOrderId,
-    amount: String(cfg.registrationFee),
-  });
-
-  await log(user.id, "payment.order.create", "payment", payment.id);
-  revalidatePath("/dashboard");
-  return payment;
 }
 
 export async function addAdmin(
