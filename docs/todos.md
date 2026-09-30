@@ -3,7 +3,7 @@
 [] Queuing of mails
 [] Seed the eval criteria table
 [] Leaderboard funcs to find the mean and map out the sorted array
-[] Razorpay wala stuff
+[x] Razorpay hosted payment link and payment ID storage
 
 
 Post Deployment:

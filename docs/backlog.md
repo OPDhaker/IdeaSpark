@@ -8,33 +8,17 @@ assignment, judging, leaderboard publish switch). These five are the gaps.
 
 ---
 
-## 1. Razorpay integration
+## 1. Hosted Razorpay payment link
 
-**Already done — do not rebuild:**
-- `POST /api/payments/verify` — client-return path, verifies `orderId|paymentId`
-  HMAC, scoped by `teams.leadUserId` so a leader can only finalize their own order.
-- `POST /api/webhooks/razorpay` — authoritative path, raw body read before parse,
-  `x-razorpay-signature` verified, acts only on `payment.captured`.
-- `POST /api/payments/verifywebhook` — legacy alias.
-- `markPaymentPaid*Atomically` (`src/db/transactions.ts`) — idempotent, mints
-  attendance codes in one bulk UPDATE.
-- `createPaymentOrderRecord(razorpayOrderId)` (`src/app/actions.ts:683`) — stores
-  the order row, but expects an order id handed to it.
-- `src/lib/razorpay.ts` — `timingSafeEqual` signature compare.
+Implemented on the accepted-team dashboard: it embeds the hosted Razorpay
+Payment Page, then lets the leader submit the resulting payment ID. The ID is
+stored in `teams.payment_id`; submission immediately marks the team paid and
+mints attendance codes atomically. Payment IDs are unique across teams.
 
-**What's missing:**
-- The `razorpay` SDK is not a dependency (`package.json`).
-- No order-creation route. Needs a server entry point that: `requireLead()` →
-  asserts `teams.status = 'accepted'` and `paymentStatus <> 'paid'` → reads the
-  amount from `event_config.registrationFee` (**never the client**) → creates the
-  Razorpay order → calls `createPaymentOrderRecord`.
-- No checkout launch on the client. `ActionCard` (`accepted` branch) has the Pay
-  button hardcoded `disabled` with a comment explaining why; that comment and the
-  "Payments open shortly" line both come out when this lands.
-- Env: key id / key secret / webhook secret into Doppler, both branches.
-
-**Watch:** `runtime = "nodejs"` on any new route (Node crypto). Payment locks the
-roster — `addMemberAtomically` / `removeMemberAtomically` reject once paid.
+This flow does **not** verify payment IDs with Razorpay. A submitted ID is
+self-reported and unlocks paid features immediately. No API keys, SDK, order
+creation, or webhooks are used. The schema migration copies IDs from any
+previously paid `payments` rows before removing the old table.
 
 ---
 

@@ -40,12 +40,6 @@ export const paymentStatusEnum = pgEnum("payment_status_enum", [
   "paid",
 ]);
 
-export const paymentTxnStatusEnum = pgEnum("payment_txn_status_enum", [
-  "created",
-  "paid",
-  "failed",
-]);
-
 export const adminRoleEnum = pgEnum("admin_role_enum", [
   "super_admin",
   "evaluator",
@@ -90,7 +84,10 @@ export const teams = pgTable(
      */
     leadUserId: text("lead_user_id").notNull().unique(),
     status: reviewStatusEnum().notNull().default("pending_submission"),
-    paymentStatus: paymentStatusEnum("payment_status"),
+    paymentStatus: paymentStatusEnum("payment_status")
+      .notNull()
+      .default("unpaid"),
+    paymentId: varchar("payment_id", { length: 255 }).unique(),
     reviewedBy: uuid("reviewed_by").references(() => admins.id, {
       onDelete: "set null",
     }),
@@ -208,37 +205,6 @@ export const submissions = pgTable(
     index("submissions_round_id_idx").on(t.roundId),
     index("submissions_status_idx").on(t.status),
     index("submissions_reviewed_by_idx").on(t.reviewedBy),
-  ],
-);
-
-export const payments = pgTable(
-  "payments",
-  {
-    id: uuid().defaultRandom().primaryKey(),
-    teamId: uuid("team_id")
-      .notNull()
-      .unique()
-      .references(() => teams.id, { onDelete: "cascade" }),
-    razorpayOrderId: varchar("razorpay_order_id", { length: 255 })
-      .notNull()
-      .unique(),
-    razorpayPaymentId: varchar("razorpay_payment_id", { length: 255 }).unique(),
-    razorpaySignature: text("razorpay_signature"),
-    amount: numeric({ precision: 10, scale: 2 }).notNull(),
-    status: paymentTxnStatusEnum().notNull().default("created"),
-    createdAt: timestamp("created_at", { withTimezone: true })
-      .notNull()
-      .defaultNow(),
-    paidAt: timestamp("paid_at", { withTimezone: true }),
-  },
-  (t) => [
-    check("payments_amount_nonnegative", sql`${t.amount} >= 0`),
-    check(
-      "payments_paid_requires_provider_id",
-      sql`${t.status} <> 'paid' OR ${t.razorpayPaymentId} IS NOT NULL`,
-    ),
-    index("payments_status_idx").on(t.status),
-    index("payments_razorpay_payment_id_idx").on(t.razorpayPaymentId),
   ],
 );
 

@@ -1,7 +1,7 @@
 import { PartyPopper, Ticket } from "lucide-react";
 import Link from "next/link";
 import type { getSubmissionState } from "@/app/actions";
-import { PaymentCheckout } from "@/components/dashboard/payment-checkout";
+import { PaymentSubmission } from "@/components/dashboard/payment-submission";
 import { Button } from "@/components/ui/button";
 import { formatMoment } from "./format";
 import { CardBody, CardTitle, DashCard } from "./panel";
@@ -71,8 +71,8 @@ export function ActionCard({ state }: { state: State }) {
         <div className="mt-4">
           <CardTitle>You&apos;re in</CardTitle>
           <CardBody>
-            Your idea was accepted. Pay the registration fee to lock your roster
-            and get your attendance passes.
+            Your idea was accepted. Pay the registration fee, then enter your
+            Razorpay payment ID to get your attendance passes.
           </CardBody>
         </div>
 
@@ -83,7 +83,7 @@ export function ActionCard({ state }: { state: State }) {
         ) : null}
 
         {Number(state.registrationFee) > 0 ? (
-          <PaymentCheckout />
+          <PaymentSubmission />
         ) : (
           <p className="mt-6 text-center text-muted-foreground text-sm">
             Online payment is temporarily unavailable.

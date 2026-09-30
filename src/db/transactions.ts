@@ -1,5 +1,4 @@
 import { and, eq, sql } from "drizzle-orm";
-import { rupeesToPaise } from "@/lib/money";
 import {
   MAX_MEMBERS,
   MIN_MEMBERS,
@@ -11,7 +10,6 @@ import {
   members,
   panelMembers,
   panels,
-  payments,
   scores,
   submissions,
   teamPanelAssignments,
@@ -181,105 +179,43 @@ export async function registerTeamWithMembers(input: {
   });
 }
 
-export async function createPaymentRecord(input: {
-  teamId: string;
-  razorpayOrderId: string;
-  amount: string;
-}) {
-  return db.transaction(async (tx) => {
-    const [team] = await tx
-      .select({ id: teams.id, paymentStatus: teams.paymentStatus })
-      .from(teams)
-      .where(eq(teams.id, input.teamId))
-      .for("update")
-      .limit(1);
-
-    if (!team) throw new Error("Team not found");
-    if (team.paymentStatus === "paid") throw new Error("Team is already paid");
-
-    const [existing] = await tx
-      .select()
-      .from(payments)
-      .where(eq(payments.teamId, input.teamId))
-      .limit(1);
-
-    if (existing) {
-      if (existing.status === "paid") throw new Error("Team is already paid");
-      return existing;
-    }
-
-    const [payment] = await tx
-      .insert(payments)
-      .values({
-        teamId: input.teamId,
-        razorpayOrderId: input.razorpayOrderId,
-        amount: input.amount,
-        status: "created",
-      })
-      .returning();
-
-    return payment;
-  });
-}
-
-/**
- * Finalizes a verified payment and locks the roster.
- * Attendance codes are minted in one SQL UPDATE, not a per-member loop.
- */
-export async function markPaymentPaidAtomically(input: {
+export async function submitTeamPaymentIdAtomically(input: {
   teamId: string;
   paymentId: string;
-  razorpayPaymentId: string;
-  razorpaySignature: string;
-  paidAt?: Date;
 }) {
   return db.transaction(async (tx) => {
     const [team] = await tx
-      .select({ id: teams.id, paymentStatus: teams.paymentStatus })
+      .select({
+        id: teams.id,
+        status: teams.status,
+        paymentStatus: teams.paymentStatus,
+        paymentId: teams.paymentId,
+      })
       .from(teams)
       .where(eq(teams.id, input.teamId))
       .for("update")
       .limit(1);
 
     if (!team) throw new Error("Team not found");
+    if (team.status !== "accepted") {
+      throw new Error("Payment is available only after acceptance");
+    }
+    if (team.paymentStatus === "paid") {
+      if (team.paymentId === input.paymentId) return team;
+      throw new Error("A payment ID has already been submitted");
+    }
 
-    const [payment] = await tx
-      .select()
-      .from(payments)
-      .where(
-        and(
-          eq(payments.id, input.paymentId),
-          eq(payments.teamId, input.teamId),
-        ),
-      )
-      .for("update")
-      .limit(1);
-
-    if (!payment) throw new Error("Payment not found");
-    if (payment.status === "paid") return payment;
-
-    const [updatedPayment] = await tx
-      .update(payments)
+    const [updatedTeam] = await tx
+      .update(teams)
       .set({
-        status: "paid",
-        razorpayPaymentId: input.razorpayPaymentId,
-        razorpaySignature: input.razorpaySignature,
-        paidAt: input.paidAt ?? new Date(),
+        paymentId: input.paymentId,
+        paymentStatus: "paid",
+        updatedAt: new Date(),
       })
-      .where(
-        and(
-          eq(payments.id, input.paymentId),
-          eq(payments.teamId, input.teamId),
-        ),
-      )
+      .where(eq(teams.id, input.teamId))
       .returning();
 
-    if (!updatedPayment) throw new Error("Failed to finalize payment");
-
-    await tx
-      .update(teams)
-      .set({ paymentStatus: "paid", updatedAt: new Date() })
-      .where(eq(teams.id, input.teamId));
+    if (!updatedTeam) throw new Error("Could not save payment ID");
 
     await tx.execute(sql`
       UPDATE members
@@ -288,93 +224,7 @@ export async function markPaymentPaidAtomically(input: {
         AND attendance_code IS NULL
     `);
 
-    return updatedPayment;
-  });
-}
-
-export async function markPaymentPaidByOrderAtomically(input: {
-  razorpayOrderId: string;
-  razorpayPaymentId: string;
-  razorpaySignature: string;
-  amountPaise: number;
-  paidAt?: Date;
-}) {
-  return db.transaction(async (tx) => {
-    const [payment] = await tx
-      .select()
-      .from(payments)
-      .where(eq(payments.razorpayOrderId, input.razorpayOrderId))
-      .for("update")
-      .limit(1);
-
-    if (!payment) throw new Error("Payment order not found");
-    if (payment.status === "paid") return payment;
-    if (rupeesToPaise(payment.amount) !== input.amountPaise) {
-      throw new Error("Captured payment amount does not match the order");
-    }
-
-    const [updatedPayment] = await tx
-      .update(payments)
-      .set({
-        status: "paid",
-        razorpayPaymentId: input.razorpayPaymentId,
-        razorpaySignature: input.razorpaySignature,
-        paidAt: input.paidAt ?? new Date(),
-      })
-      .where(
-        and(
-          eq(payments.id, payment.id),
-          eq(payments.razorpayOrderId, input.razorpayOrderId),
-        ),
-      )
-      .returning();
-
-    if (!updatedPayment) throw new Error("Failed to finalize payment");
-
-    await tx
-      .update(teams)
-      .set({ paymentStatus: "paid", updatedAt: new Date() })
-      .where(eq(teams.id, payment.teamId));
-
-    await tx.execute(sql`
-      UPDATE members
-      SET attendance_code = gen_random_uuid()::text
-      WHERE team_id = ${payment.teamId}
-        AND attendance_code IS NULL
-    `);
-
-    return updatedPayment;
-  });
-}
-
-export async function markPaymentFailedByOrderAtomically(input: {
-  razorpayOrderId: string;
-  razorpayPaymentId: string;
-  razorpaySignature: string;
-}) {
-  return db.transaction(async (tx) => {
-    const [payment] = await tx
-      .select()
-      .from(payments)
-      .where(eq(payments.razorpayOrderId, input.razorpayOrderId))
-      .for("update")
-      .limit(1);
-
-    if (!payment) throw new Error("Payment order not found");
-    if (payment.status === "paid") return payment;
-
-    const [updatedPayment] = await tx
-      .update(payments)
-      .set({
-        status: "failed",
-        razorpayPaymentId: input.razorpayPaymentId,
-        razorpaySignature: input.razorpaySignature,
-      })
-      .where(eq(payments.id, payment.id))
-      .returning();
-
-    if (!updatedPayment) throw new Error("Failed to record payment failure");
-    return updatedPayment;
+    return updatedTeam;
   });
 }
 

@@ -91,8 +91,8 @@ Four distinct layers; keep them separate:
 ### Business invariants (enforced in DB *and* transaction layer)
 - Team size 1–3, leader included; exactly one leader (`one_leader_per_team` partial unique index). `src/lib/team-size.ts` is the single source, and the ceiling is also enforced in Postgres by `team_member_limit_trigger`.
 - **Payment locks the roster** — `addMemberAtomically` / `removeMemberAtomically` reject once `teams.paymentStatus = 'paid'`. Removal also refuses to drop the leader or go below 1 member.
-- Attendance codes are minted **only on successful payment**, in one bulk `UPDATE … SET attendance_code = gen_random_uuid()` inside the payment transaction — never per-member in a loop.
-- Payment is gated on an `accepted` submission; amount always comes from `event_config.registrationFee`, never the client.
+- Attendance codes are minted when the accepted team's leader submits a payment ID and the same transaction marks `teams.payment_status` paid.
+- The accepted-team dashboard embeds the hosted Razorpay Payment Page. The leader enters the resulting payment ID, which is stored in `teams.payment_id`; submission marks the team paid immediately. The ID is self-reported and is **not verified against Razorpay**, so do not describe this as verified payment processing.
 - `event_config` is a singleton (`id = 1`, enforced by check constraint); at most one active `evaluation_rounds` row (partial unique index).
 - Leaderboard counts only teams that are both `approved` and `paid`.
 - **The team leaderboard is published, not scheduled.** `event_config.leaderboard_published` is a switch a super admin flips at `/admin/event`; no date is involved. Scores arrive one judge at a time while a round runs, so a date-driven unlock would show a half-judged board, and when judging is *finished* is a call made in the room. `/panel/[round]/leaderboard` is deliberately **not** gated by it — judges need theirs live. That is the only reason the two boards differ.
@@ -103,13 +103,8 @@ Four distinct layers; keep them separate:
 - **`super_admin` sees everything and writes nothing extra.** They get every panel, every queue and every score, but the write gates above are not relaxed for them: saving a score still means sitting on that team's panel. A super admin who is not on it gets a read-only sheet. This keeps a team's mean exactly its panel's mean — an admin looking into a team cannot accidentally become a voice in its score.
 - `evaluation_rounds.event_date` must be `event_config.day_one` or `day_two`. A `check` cannot reach across tables, so that one is enforced in `createEvaluationRound`, the way `scanAttendance` validates a scan date.
 
-### Razorpay payment flow
-Three server entry points, all `runtime = "nodejs"` (Node crypto):
-- `POST /api/payments/verify` — client-return path. Verifies `orderId|paymentId` HMAC, and scopes the lookup by `teams.leadUserId = session user` so a leader can only finalize their own order.
-- `POST /api/webhooks/razorpay` — authoritative path. Reads `await request.text()` **before** any JSON parse (Razorpay signs the exact raw body), verifies `x-razorpay-signature`, and only acts on `payment.captured`. Unknown orders are acked without mutating state.
-- `POST /api/payments/verifywebhook` — legacy alias that re-exports the webhook `POST`.
-
-Both finalize through `markPaymentPaid*Atomically`, which is idempotent (returns early if already `paid`). Signature comparison uses `timingSafeEqual` in `src/lib/razorpay.ts` — keep it that way.
+### Razorpay payment link
+The accepted-team dashboard embeds the hosted Payment Page at `https://pages.razorpay.com/pl_TdZFxdVedyavh5/view`. After paying, the team leader submits the Razorpay payment ID. `submitPaymentId` stores it on `teams.payment_id`; `submitTeamPaymentIdAtomically` marks the team paid and mints attendance codes in the same transaction. Payment IDs are unique across teams. There are no Razorpay API keys, SDK, order routes, signature verification, or webhook requirements. **Submitting an ID immediately unlocks paid features and is not proof of payment.**
 
 ### Judging panel (`/panel`)
 The only place a score is written. `/admin` has no scoring form — one code path means one rubric and no way to bypass panel assignment.
