@@ -77,8 +77,11 @@ export function PaymentSubmission() {
           id="razorpay-payment-id"
           name="paymentId"
           autoComplete="off"
+          minLength={5}
           maxLength={255}
+          pattern="pay_.+"
           placeholder="pay_..."
+          title="Payment ID must start with pay_."
           value={paymentId}
           onChange={(event) => setPaymentId(event.target.value)}
           disabled={pending}

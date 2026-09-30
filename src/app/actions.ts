@@ -665,8 +665,15 @@ export async function submitPaymentId(paymentId: string) {
       error: "Payment is available only after your team is accepted.",
     };
   }
-  if (!normalizedPaymentId || normalizedPaymentId.length > 255) {
-    return { ok: false as const, error: "Enter a valid Razorpay payment ID." };
+  if (
+    !normalizedPaymentId.startsWith("pay_") ||
+    normalizedPaymentId.length <= 4 ||
+    normalizedPaymentId.length > 255
+  ) {
+    return {
+      ok: false as const,
+      error: "Payment ID must start with pay_ and include an ID after it.",
+    };
   }
 
   try {

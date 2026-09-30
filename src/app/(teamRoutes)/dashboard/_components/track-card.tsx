@@ -9,7 +9,9 @@ export function TrackCard({ state }: { state: State }) {
   return (
     <DashCard className="flex flex-col gap-6 justify-between">
       <CardTitle>Track details</CardTitle>
-
+      {(state.teamStatus === "accepted" && state.paymentStatus === "unpaid") && (
+        <img src={'/trackImages/eren.jpg'} alt="" className="rounded-xl" />
+      )}
       <dl className="mt-6 flex flex-col gap-5">
         <Detail label="Team" value={state.teamName} />
         <Detail label="Track" value={state.trackName ?? "Not set"} />
