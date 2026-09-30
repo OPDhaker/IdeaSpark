@@ -12,7 +12,6 @@ import {
   evaluationRounds,
   eventConfig,
   members,
-  payments,
   scores,
   submissions,
   teams,
@@ -26,6 +25,7 @@ import {
   removeMemberAtomically,
   reviewSubmissionAtomically,
   submitIdeaAtomically,
+  submitTeamPaymentIdAtomically,
 } from "@/db/transactions";
 import { log } from "@/lib/audit";
 import { auth } from "@/lib/auth/server";
@@ -617,8 +617,7 @@ export async function getReceipt() {
   const team = await getTeamFor(user.id);
   if (!team || team.paymentStatus !== "paid") return null;
 
-  const [[payment], passes, [track]] = await Promise.all([
-    db.select().from(payments).where(eq(payments.teamId, team.id)).limit(1),
+  const [passes, [track]] = await Promise.all([
     db
       .select({
         id: members.id,
@@ -648,11 +647,52 @@ export async function getReceipt() {
   return {
     team,
     trackName: track?.name ?? null,
-    payment: payment ?? null,
     members: passes,
     dayOne: cfg?.dayOne ?? null,
     dayTwo: cfg?.dayTwo ?? null,
   };
+}
+
+export async function submitPaymentId(paymentId: string) {
+  const user = await requireLead();
+  const team = await getTeamFor(user.id);
+  const normalizedPaymentId = paymentId.trim();
+
+  if (!team) return { ok: false as const, error: "Team not found." };
+  if (team.status !== "accepted") {
+    return {
+      ok: false as const,
+      error: "Payment is available only after your team is accepted.",
+    };
+  }
+  if (!normalizedPaymentId || normalizedPaymentId.length > 255) {
+    return { ok: false as const, error: "Enter a valid Razorpay payment ID." };
+  }
+
+  try {
+    await submitTeamPaymentIdAtomically({
+      teamId: team.id,
+      paymentId: normalizedPaymentId,
+    });
+  } catch (error) {
+    if (uniqueViolationConstraint(error) === "teams_payment_id_unique") {
+      return {
+        ok: false as const,
+        error: "That payment ID has already been submitted.",
+      };
+    }
+    return {
+      ok: false as const,
+      error:
+        error instanceof Error ? error.message : "Could not save payment ID.",
+    };
+  }
+
+  await log(user.id, "payment.id.submit", "team", team.id);
+  revalidatePath("/dashboard");
+  revalidatePath("/dashboard/receipt");
+  revalidatePath("/dashboard/team-details");
+  return { ok: true as const };
 }
 
 /**
@@ -1012,6 +1052,7 @@ export async function getAdminReviewData() {
           trackName: tracks.name,
           status: teams.status,
           paymentStatus: teams.paymentStatus,
+          paymentId: teams.paymentId,
           createdAt: teams.createdAt,
         })
         .from(teams)

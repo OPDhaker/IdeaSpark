@@ -16,7 +16,8 @@ type ReviewData = {
     trackId: string | null;
     trackName: string | null;
     status: "pending_submission" | "in_review" | "rejected" | "accepted";
-    paymentStatus: "unpaid" | "paid" | null;
+    paymentStatus: "unpaid" | "paid";
+    paymentId: string | null;
   }>;
   rounds: Array<{
     id: string;
@@ -224,6 +225,11 @@ export function AdminDashboard({ data }: { data: ReviewData }) {
                       {selectedMembers.length} members · payment{" "}
                       {selectedTeam.paymentStatus ?? "unpaid"}
                     </p>
+                    {selectedTeam.paymentId ? (
+                      <p className="mt-1 break-all text-xs text-[#17201d]/60">
+                        Payment ID: {selectedTeam.paymentId}
+                      </p>
+                    ) : null}
                   </div>
                   {canReview && (
                     <div className="flex flex-wrap gap-2">

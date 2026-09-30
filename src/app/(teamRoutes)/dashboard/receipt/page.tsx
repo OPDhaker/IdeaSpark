@@ -13,22 +13,6 @@ export const metadata = {
   title: "Passes | IdeaSpark 3.0",
 };
 
-function money(amount: string) {
-  return new Intl.NumberFormat("en-IN", {
-    style: "currency",
-    currency: "INR",
-    minimumFractionDigits: 2,
-  }).format(Number(amount));
-}
-
-function moment(value: Date) {
-  return new Intl.DateTimeFormat("en-IN", {
-    dateStyle: "medium",
-    timeStyle: "short",
-    timeZone: "Asia/Kolkata",
-  }).format(value);
-}
-
 function Line({ label, value }: { label: string; value: string }) {
   return (
     <div className="flex items-baseline justify-between gap-4">
@@ -97,28 +81,12 @@ export default async function ReceiptPage() {
 
           <div className="receipt-rule my-6" />
 
-          {receipt.payment ? (
+          {receipt.team.paymentId ? (
             <div className="flex flex-col gap-1.5">
-              <Line label="ORDER" value={receipt.payment.razorpayOrderId} />
-              <Line
-                label="PAYMENT"
-                value={receipt.payment.razorpayPaymentId ?? "|"}
-              />
-              <Line
-                label="PAID"
-                value={
-                  receipt.payment.paidAt ? moment(receipt.payment.paidAt) : "|"
-                }
-              />
-              <div className="mt-2 flex items-baseline justify-between gap-4 font-semibold">
-                <span>AMOUNT</span>
-                <span className="tabular-nums">
-                  {money(receipt.payment.amount)}
-                </span>
-              </div>
+              <Line label="PAYMENT ID" value={receipt.team.paymentId} />
             </div>
           ) : (
-            <p className="opacity-60">Payment record unavailable.</p>
+            <p className="opacity-60">Payment ID unavailable.</p>
           )}
 
           <div className="receipt-rule my-6" />
