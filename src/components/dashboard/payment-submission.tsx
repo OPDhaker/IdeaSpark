@@ -57,9 +57,9 @@ export function PaymentSubmission() {
   }
 
   return (
-    <div className="mt-6">
+    <div className="mt-6 self-center max-w-100">
       <div
-        className="razorpay-embed-btn"
+        className="razorpay-embed-btn ml-[calc(50%-130px)]"
         data-url={paymentPageUrl}
         data-text="Pay Now"
         data-color="#000000"
@@ -69,7 +69,7 @@ export function PaymentSubmission() {
       <form onSubmit={handleSubmit} className="mt-6 space-y-3">
         <label
           htmlFor="razorpay-payment-id"
-          className="block text-sm font-medium"
+          className="block text-sm font-medium self-center w-full"
         >
           Razorpay payment ID
         </label>

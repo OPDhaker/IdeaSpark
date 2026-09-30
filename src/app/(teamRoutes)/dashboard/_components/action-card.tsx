@@ -66,7 +66,7 @@ export function ActionCard({ state }: { state: State }) {
 
   if (state.teamStatus === "accepted") {
     return (
-      <DashCard>
+      <DashCard className="flex flex-col gap-3">
         <PartyPopper aria-hidden className="size-14 stroke-2 text-primary" />
         <div className="mt-4">
           <CardTitle>You&apos;re in</CardTitle>
@@ -77,13 +77,13 @@ export function ActionCard({ state }: { state: State }) {
         </div>
 
         {state.registrationFee ? (
-          <p className="mt-5 text-6xl font-semibold tracking-tight">
+          <p className="mt-5 text-6xl self-center font-semibold tracking-tight">
             {formatFee(state.registrationFee)}
           </p>
         ) : null}
 
         {Number(state.registrationFee) > 0 ? (
-          <PaymentSubmission />
+            <PaymentSubmission />
         ) : (
           <p className="mt-6 text-center text-muted-foreground text-sm">
             Online payment is temporarily unavailable.
