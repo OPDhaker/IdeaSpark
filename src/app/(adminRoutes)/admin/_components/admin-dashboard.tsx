@@ -2,8 +2,10 @@
 
 import Link from "next/link";
 import { useMemo, useState } from "react";
+import { recheckDriveLinks } from "@/actions/submissions";
 import { reviewSubmission, setTeamStatus } from "@/app/actions";
 import { Badge } from "@/components/ui/badge";
+import { formatDate } from "../_lib/format";
 import {
   DEFAULT_FILTERS,
   type TeamFilters as Filters,
@@ -13,6 +15,7 @@ import {
   type TeamSort,
 } from "../_lib/team-filters";
 import { AdminOverview } from "./admin-overview";
+import { DriveLinkStatus } from "./drive-link-status";
 import { TeamFilters } from "./team-filters";
 
 type ReviewData = {
@@ -46,6 +49,10 @@ type ReviewData = {
     title: string | null;
     description: string | null;
     driveLink: string | null;
+    driveLinkStatus: "public" | "restricted" | "unverified" | null;
+    driveLinkName: string | null;
+    driveLinkModifiedAt: Date | null;
+    driveLinkCheckedAt: Date | null;
     status: "pending_submission" | "in_review" | "rejected" | "accepted";
     remarks: string | null;
     submittedAt: Date | null;
@@ -66,6 +73,7 @@ type ReviewData = {
     score: string | null;
     remarks: string | null;
   }>;
+  submissionDeadline: Date | null;
 };
 
 const statusVariant = {
@@ -92,6 +100,21 @@ export function AdminDashboard({ data }: { data: ReviewData }) {
     (submission) =>
       submission.teamId === selectedTeamId &&
       submission.roundId === selectedRoundId,
+  );
+  // Teams whose deck for the selected round is known to be private, so the
+  // list can flag them without opening each one.
+  const privateLinkTeams = useMemo(
+    () =>
+      new Set(
+        data.submissions
+          .filter(
+            (submission) =>
+              submission.roundId === selectedRoundId &&
+              submission.driveLinkStatus === "restricted",
+          )
+          .map((submission) => submission.teamId),
+      ),
+    [data.submissions, selectedRoundId],
   );
   const selectedMembers = data.members.filter(
     (member) => member.teamId === selectedTeamId,
@@ -131,6 +154,25 @@ export function AdminDashboard({ data }: { data: ReviewData }) {
       setNotice(successMessage);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Action failed.");
+    } finally {
+      setPending(false);
+    }
+  }
+
+  async function handleRecheck() {
+    clearFeedback();
+    setPending(true);
+    try {
+      const counts = await recheckDriveLinks(selectedRoundId);
+      const parts = [
+        `${counts.public} public`,
+        `${counts.restricted} private`,
+        counts.unverified && `${counts.unverified} unreachable`,
+        counts.invalid && `${counts.invalid} not a deck link`,
+      ].filter(Boolean);
+      setNotice(`Links rechecked: ${parts.join(", ")}.`);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Recheck failed.");
     } finally {
       setPending(false);
     }
@@ -243,6 +285,9 @@ export function AdminDashboard({ data }: { data: ReviewData }) {
                     >
                       {team.paymentStatus}
                     </Badge>
+                    {privateLinkTeams.has(team.id) && (
+                      <Badge variant="destructive">private link</Badge>
+                    )}
                   </span>
                 </button>
               ))}
@@ -313,19 +358,32 @@ export function AdminDashboard({ data }: { data: ReviewData }) {
                             Review the selected round&apos;s idea.
                           </p>
                         </div>
-                        <select
-                          value={selectedRoundId}
-                          onChange={(event) =>
-                            setSelectedRoundId(event.target.value)
-                          }
-                          className="border border-[#17201d]/20 bg-white px-3 py-2 text-sm"
-                        >
-                          {data.rounds.map((round) => (
-                            <option key={round.id} value={round.id}>
-                              Round {round.sequenceNo}: {round.name}
-                            </option>
-                          ))}
-                        </select>
+                        <div className="flex flex-wrap gap-2">
+                          <select
+                            value={selectedRoundId}
+                            onChange={(event) =>
+                              setSelectedRoundId(event.target.value)
+                            }
+                            className="border border-[#17201d]/20 bg-white px-3 py-2 text-sm"
+                          >
+                            {data.rounds.map((round) => (
+                              <option key={round.id} value={round.id}>
+                                Round {round.sequenceNo}: {round.name}
+                              </option>
+                            ))}
+                          </select>
+                          {canReview && selectedRoundId && (
+                            <button
+                              type="button"
+                              disabled={pending}
+                              onClick={handleRecheck}
+                              title="Check every deck link in this round is still public"
+                              className="border border-[#17201d]/20 px-3 py-2 text-sm disabled:opacity-50"
+                            >
+                              Recheck links
+                            </button>
+                          )}
+                        </div>
                       </div>
                       {selectedSubmission ? (
                         <div className="mt-5">
@@ -335,10 +393,7 @@ export function AdminDashboard({ data }: { data: ReviewData }) {
                             </span>
                             {selectedSubmission.submittedAt && (
                               <span>
-                                ·{" "}
-                                {new Date(
-                                  selectedSubmission.submittedAt,
-                                ).toLocaleDateString()}
+                                · {formatDate(selectedSubmission.submittedAt)}
                               </span>
                             )}
                           </div>
@@ -350,14 +405,27 @@ export function AdminDashboard({ data }: { data: ReviewData }) {
                               "No description provided."}
                           </p>
                           {selectedSubmission.driveLink && (
-                            <a
-                              href={selectedSubmission.driveLink}
-                              target="_blank"
-                              rel="noreferrer"
-                              className="mt-4 inline-block text-sm font-medium text-[#55705c] underline"
-                            >
-                              Open submission link
-                            </a>
+                            <div className="mt-4">
+                              <a
+                                href={selectedSubmission.driveLink}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="inline-block text-sm font-medium text-[#55705c] underline"
+                              >
+                                Open submission link
+                              </a>
+                              <DriveLinkStatus
+                                status={selectedSubmission.driveLinkStatus}
+                                name={selectedSubmission.driveLinkName}
+                                modifiedAt={
+                                  selectedSubmission.driveLinkModifiedAt
+                                }
+                                checkedAt={
+                                  selectedSubmission.driveLinkCheckedAt
+                                }
+                                deadline={data.submissionDeadline}
+                              />
+                            </div>
                           )}
                           {canReview && (
                             <div className="mt-5 border-t border-[#17201d]/10 pt-4">

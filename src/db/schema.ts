@@ -40,6 +40,17 @@ export const paymentStatusEnum = pgEnum("payment_status_enum", [
   "paid",
 ]);
 
+/**
+ * Whether a submission's Drive link opened for an anonymous caller when it was
+ * last checked (`src/lib/drive.ts`). `unverified` = the check itself failed and
+ * the link was let through; NULL = submitted before checks existed.
+ */
+export const driveLinkStatusEnum = pgEnum("drive_link_status_enum", [
+  "public",
+  "restricted",
+  "unverified",
+]);
+
 export const adminRoleEnum = pgEnum("admin_role_enum", [
   "super_admin",
   "evaluator",
@@ -195,6 +206,16 @@ export const submissions = pgTable(
     title: varchar({ length: 255 }),
     description: text(),
     driveLink: text("drive_link"),
+    driveLinkStatus: driveLinkStatusEnum("drive_link_status"),
+    /** File name Drive reported, so a reviewer can tell it's the right deck. */
+    driveLinkName: varchar("drive_link_name", { length: 255 }),
+    /** Drive's `modifiedTime`: a deck edited after the deadline is flagged. */
+    driveLinkModifiedAt: timestamp("drive_link_modified_at", {
+      withTimezone: true,
+    }),
+    driveLinkCheckedAt: timestamp("drive_link_checked_at", {
+      withTimezone: true,
+    }),
     status: reviewStatusEnum().notNull().default("pending_submission"),
     submittedAt: timestamp("submitted_at", { withTimezone: true }),
     reviewedBy: uuid("reviewed_by").references(() => admins.id, {

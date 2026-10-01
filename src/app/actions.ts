@@ -28,6 +28,7 @@ import {
 } from "@/db/transactions";
 import { log } from "@/lib/audit";
 import { auth } from "@/lib/auth/server";
+import { checkDriveLink } from "@/lib/drive";
 import { getAdminActor, requireAdminRole } from "@/lib/roles";
 import {
   MAX_MEMBERS,
@@ -388,19 +389,24 @@ export async function submitSubmission(
   await assertBefore("submissionDeadline");
   const team = await getTeamFor(user.id);
   if (!team) throw new Error("Create your team first");
+  if (!driveLink.trim()) throw new Error("A submission link is required");
 
-  const [round] = await db
-    .select()
-    .from(evaluationRounds)
-    .where(eq(evaluationRounds.id, roundId))
-    .limit(1);
+  // The Drive check is a call to Google, so it runs alongside the reads rather
+  // than after them, and never inside the transaction below.
+  const [[round], [{ value: memberCount }], linkCheck] = await Promise.all([
+    db
+      .select()
+      .from(evaluationRounds)
+      .where(eq(evaluationRounds.id, roundId))
+      .limit(1),
+    db
+      .select({ value: count() })
+      .from(members)
+      .where(eq(members.teamId, team.id)),
+    checkDriveLink(driveLink),
+  ]);
   if (!round) throw new Error("Evaluation round not found");
   if (!round.isActive) throw new Error("This evaluation round is not active");
-
-  const [{ value: memberCount }] = await db
-    .select({ value: count() })
-    .from(members)
-    .where(eq(members.teamId, team.id));
 
   if (memberCount < MIN_MEMBERS) {
     throw new Error(
@@ -408,7 +414,14 @@ export async function submitSubmission(
     );
   }
 
-  if (!driveLink.trim()) throw new Error("A submission link is required");
+  // A bad link is an expected outcome the form branches on (field error vs the
+  // "restricted" modal), so it comes back as a value rather than a throw.
+  if (!linkCheck.ok) {
+    return { ok: false, reason: "invalid", message: linkCheck.error } as const;
+  }
+  if (linkCheck.status === "restricted") {
+    return { ok: false, reason: "restricted" } as const;
+  }
 
   // The status transition (submission + team, in one transaction) lives in the
   // transaction layer; the state guards are there too.
@@ -418,13 +431,19 @@ export async function submitSubmission(
     title: title.trim() || null,
     description: description.trim() || null,
     driveLink: driveLink.trim(),
+    driveLinkCheck: {
+      driveLinkStatus: linkCheck.status,
+      driveLinkName: linkCheck.name,
+      driveLinkModifiedAt: linkCheck.modifiedAt,
+      driveLinkCheckedAt: linkCheck.checkedAt,
+    },
   });
 
   log(user.id, "submission.submit", "submission", submission.id, {
     roundId,
   });
   revalidatePath("/dashboard");
-  return submission;
+  return { ok: true } as const;
 }
 
 export async function getMyTeam() {
@@ -981,6 +1000,7 @@ export async function getAdminReviewData() {
     memberRows,
     scoreRows,
     trackRows,
+    [config],
   ] = await Promise.all([
     db
       .select({
@@ -1014,6 +1034,10 @@ export async function getAdminReviewData() {
         title: submissions.title,
         description: submissions.description,
         driveLink: submissions.driveLink,
+        driveLinkStatus: submissions.driveLinkStatus,
+        driveLinkName: submissions.driveLinkName,
+        driveLinkModifiedAt: submissions.driveLinkModifiedAt,
+        driveLinkCheckedAt: submissions.driveLinkCheckedAt,
         status: submissions.status,
         remarks: submissions.remarks,
         submittedAt: submissions.submittedAt,
@@ -1047,6 +1071,11 @@ export async function getAdminReviewData() {
       .select({ id: tracks.id, name: tracks.name, isActive: tracks.isActive })
       .from(tracks)
       .orderBy(tracks.name),
+    // A deck Drive reports as modified after this was edited past the deadline.
+    db
+      .select({ submissionDeadline: eventConfig.submissionDeadline })
+      .from(eventConfig)
+      .limit(1),
   ]);
 
   return {
@@ -1057,5 +1086,6 @@ export async function getAdminReviewData() {
     members: memberRows,
     scores: scoreRows,
     tracks: trackRows,
+    submissionDeadline: config?.submissionDeadline ?? null,
   };
 }

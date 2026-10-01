@@ -23,6 +23,14 @@ export type ReviewStatus =
   | "rejected"
   | "accepted";
 
+/** What `checkDriveLink` learned about a submission's link, as columns. */
+export type DriveLinkFields = {
+  driveLinkStatus: "public" | "restricted" | "unverified";
+  driveLinkName: string | null;
+  driveLinkModifiedAt: Date | null;
+  driveLinkCheckedAt: Date;
+};
+
 export type RegistrationMember = {
   name: string;
   raNumber: string;
@@ -234,6 +242,7 @@ export async function submitIdeaAtomically(input: {
   title: string | null;
   description: string | null;
   driveLink: string;
+  driveLinkCheck: DriveLinkFields;
 }) {
   return db.transaction(async (tx) => {
     await tx.execute(
@@ -260,6 +269,7 @@ export async function submitIdeaAtomically(input: {
       title: input.title,
       description: input.description,
       driveLink: input.driveLink,
+      ...input.driveLinkCheck,
       status: "in_review" as const,
       submittedAt: now,
       updatedAt: now,
@@ -286,6 +296,35 @@ export async function submitIdeaAtomically(input: {
 
     return submission;
   });
+}
+
+/**
+ * Writes a batch of Drive link rechecks in one statement. A `restricted` result
+ * carries no name or modified time (Drive refused to say), so those keep their
+ * last known value rather than being blanked.
+ */
+export async function recordDriveLinkChecks(
+  checks: Array<{ submissionId: string } & DriveLinkFields>,
+) {
+  if (checks.length === 0) return;
+
+  const rows = sql.join(
+    checks.map(
+      (check) =>
+        sql`(${check.submissionId}::uuid, ${check.driveLinkStatus}::drive_link_status_enum, ${check.driveLinkName}::varchar, ${check.driveLinkModifiedAt?.toISOString() ?? null}::timestamptz, ${check.driveLinkCheckedAt.toISOString()}::timestamptz)`,
+    ),
+    sql`, `,
+  );
+
+  await db.execute(sql`
+    UPDATE submissions AS s
+    SET drive_link_status = v.status,
+        drive_link_name = COALESCE(v.name, s.drive_link_name),
+        drive_link_modified_at = COALESCE(v.modified_at, s.drive_link_modified_at),
+        drive_link_checked_at = v.checked_at
+    FROM (VALUES ${rows}) AS v(id, status, name, modified_at, checked_at)
+    WHERE s.id = v.id
+  `);
 }
 
 /**

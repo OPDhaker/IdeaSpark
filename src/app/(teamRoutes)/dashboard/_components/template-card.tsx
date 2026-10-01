@@ -1,6 +1,12 @@
-import { ArrowDownToLine, ExternalLink, Presentation } from "lucide-react";
+import {
+  ArrowDownToLine,
+  ExternalLink,
+  Presentation,
+  TriangleAlert,
+} from "lucide-react";
 import type { getSubmissionState } from "@/app/actions";
 import { Button } from "@/components/ui/button";
+import { DRIVE_SHARING_FIX } from "@/lib/drive";
 import { formatMoment } from "./format";
 import { CardBody, CardTitle, DashCard } from "./panel";
 
@@ -41,6 +47,23 @@ export function TemplateCard({
               {submission.submittedAt ? (
                 <p className="mt-2 text-muted-foreground text-sm tabular-nums">
                   Submitted {formatMoment(submission.submittedAt)}
+                </p>
+              ) : null}
+              {/* Set by an admin recheck. Fixing sharing in Drive keeps the
+                  same link, so the team never has to resubmit. */}
+              {submission.driveLinkStatus === "restricted" ? (
+                <p
+                  role="alert"
+                  className="mt-4 flex gap-2 text-destructive text-sm"
+                >
+                  <TriangleAlert
+                    aria-hidden
+                    className="mt-0.5 size-4 shrink-0"
+                  />
+                  <span>
+                    Judges can&apos;t open your deck: the link is no longer
+                    public. {DRIVE_SHARING_FIX}
+                  </span>
                 </p>
               ) : null}
             </div>
