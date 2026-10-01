@@ -4,6 +4,7 @@ import {
   ClipboardList,
   LayoutDashboard,
   LogOut,
+  ScanLine,
   Settings2,
   Users,
 } from "lucide-react";
@@ -31,6 +32,12 @@ const NAV = [
     label: "Control room",
     icon: LayoutDashboard,
     roles: ["super_admin", "evaluator", "volunteer"],
+  },
+  {
+    href: "/admin/attendance",
+    label: "Mark attendance",
+    icon: ScanLine,
+    roles: ["super_admin", "volunteer"],
   },
   {
     href: "/admin/panels",

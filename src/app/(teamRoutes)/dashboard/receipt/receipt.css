@@ -60,7 +60,7 @@
     box-shadow: none;
   }
 
-  /* A member's name, RA number and QR must never straddle a page break. */
+  /* The team QR and its code must never straddle a page break. */
   .receipt-pass {
     break-inside: avoid;
     page-break-inside: avoid;

@@ -1,4 +1,4 @@
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import {
   MAX_MEMBERS,
   MIN_MEMBERS,
@@ -6,6 +6,7 @@ import {
 } from "@/lib/team-size";
 import { db } from "./index";
 import {
+  attendance,
   evaluationRounds,
   members,
   panelMembers,
@@ -83,7 +84,6 @@ export async function addMemberAtomically(
         facultyEmail: input.facultyEmail,
         teamId,
         isLeader: Boolean(input.isLeader),
-        attendanceCode: null,
       })
       .returning();
 
@@ -168,7 +168,6 @@ export async function registerTeamWithMembers(input: {
       facultyEmail: member.facultyEmail,
       teamId: team.id,
       isLeader: Boolean(member.isLeader),
-      attendanceCode: null,
     }));
 
     const createdMembers = await tx
@@ -210,19 +209,15 @@ export async function submitTeamPaymentIdAtomically(input: {
       .set({
         paymentId: input.paymentId,
         paymentStatus: "paid",
+        // The team's door pass, minted with the payment so a paid team can
+        // never be without one (`teams_paid_has_attendance_code`).
+        attendanceCode: sql`gen_random_uuid()::text`,
         updatedAt: new Date(),
       })
       .where(eq(teams.id, input.teamId))
       .returning();
 
     if (!updatedTeam) throw new Error("Could not save payment ID");
-
-    await tx.execute(sql`
-      UPDATE members
-      SET attendance_code = gen_random_uuid()::text
-      WHERE team_id = ${input.teamId}
-        AND attendance_code IS NULL
-    `);
 
     return updatedTeam;
   });
@@ -640,5 +635,88 @@ export async function setPanelJudgesAtomically(input: {
         input.adminIds.map((adminId) => ({ panelId: input.panelId, adminId })),
       )
       .returning();
+  });
+}
+
+/**
+ * Marks and un-marks members of one team present for one event day.
+ *
+ * Two volunteers can scan the same team at once, so the caller sends only the
+ * members it actually changed, never the whole roster: a stale sheet then
+ * cannot undo a mark someone else just made. Marks are `ON CONFLICT DO
+ * NOTHING`, so the same member marked twice is one row; the team-scoped
+ * advisory lock serialises the two volunteers so a mark and an un-mark of the
+ * same member resolve in commit order.
+ */
+export async function setTeamAttendanceAtomically(input: {
+  teamId: string;
+  eventDate: string;
+  adminId: string;
+  mark: string[];
+  unmark: string[];
+}) {
+  const mark = [...new Set(input.mark)];
+  const unmark = [...new Set(input.unmark)];
+  if (mark.some((id) => unmark.includes(id)))
+    throw new Error("A member cannot be marked and un-marked at once");
+
+  return db.transaction(async (tx) => {
+    await tx.execute(
+      sql`SELECT pg_advisory_xact_lock(hashtext(${input.teamId}))`,
+    );
+
+    const [team] = await tx
+      .select({ paymentStatus: teams.paymentStatus })
+      .from(teams)
+      .where(eq(teams.id, input.teamId))
+      .limit(1);
+
+    if (!team) throw new Error("Team not found");
+    if (team.paymentStatus !== "paid")
+      throw new Error("Only teams that have paid can be marked present");
+
+    const ids = [...mark, ...unmark];
+    if (ids.length === 0) return { marked: [], unmarked: [] };
+
+    const onTeam = await tx
+      .select({ id: members.id })
+      .from(members)
+      .where(and(eq(members.teamId, input.teamId), inArray(members.id, ids)));
+
+    if (onTeam.length !== ids.length)
+      throw new Error("A selected member is not on this team");
+
+    const marked = mark.length
+      ? await tx
+          .insert(attendance)
+          .values(
+            mark.map((memberId) => ({
+              memberId,
+              eventDate: input.eventDate,
+              scannedBy: input.adminId,
+            })),
+          )
+          .onConflictDoNothing({
+            target: [attendance.memberId, attendance.eventDate],
+          })
+          .returning({ memberId: attendance.memberId })
+      : [];
+
+    const unmarked = unmark.length
+      ? await tx
+          .delete(attendance)
+          .where(
+            and(
+              eq(attendance.eventDate, input.eventDate),
+              inArray(attendance.memberId, unmark),
+            ),
+          )
+          .returning({ memberId: attendance.memberId })
+      : [];
+
+    return {
+      marked: marked.map((row) => row.memberId),
+      unmarked: unmarked.map((row) => row.memberId),
+    };
   });
 }

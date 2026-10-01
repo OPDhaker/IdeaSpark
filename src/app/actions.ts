@@ -7,7 +7,6 @@ import { getLeaderboard } from "@/db/queries";
 import {
   admins,
   announcements,
-  attendance,
   departments,
   evaluationRounds,
   eventConfig,
@@ -79,21 +78,6 @@ async function assertBefore(
     .limit(1);
   if (!cfg) throw new Error("Event configuration is not initialized");
   if (Date.now() > cfg[field].getTime()) throw new Error("Deadline passed");
-}
-
-/**
- * `YYYY-MM-DD` for "now" in Asia/Kolkata.
- *
- * Every `date` column here means a local calendar day, and the server runs in
- * UTC — comparing those directly would flip the day at 05:30 IST.
- */
-function todayInIst() {
-  return new Intl.DateTimeFormat("en-CA", {
-    timeZone: "Asia/Kolkata",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).format(new Date());
 }
 
 export async function getDepartments() {
@@ -609,8 +593,8 @@ export async function getTeamRoster() {
  * Everything on the printable pass strip. Returns null unless the team has
  * actually paid, so the route guard and the data fetch cannot disagree.
  *
- * One pass per member: `attendance_code` is minted per member on payment and
- * only the leader has a login, so the leader hands the passes out.
+ * One pass per team: `teams.attendance_code` is minted on payment. A volunteer
+ * scans it at the door, then marks each member present individually.
  */
 export async function getReceipt() {
   const user = await requireLead();
@@ -624,7 +608,6 @@ export async function getReceipt() {
         name: members.name,
         raNumber: members.raNumber,
         isLeader: members.isLeader,
-        attendanceCode: members.attendanceCode,
       })
       .from(members)
       .where(eq(members.teamId, team.id))
@@ -830,6 +813,7 @@ export async function getEventControls() {
   const [cfg] = await db
     .select({
       leaderboardPublished: eventConfig.leaderboardPublished,
+      attendanceDay: eventConfig.attendanceDay,
       dayOne: eventConfig.dayOne,
       dayTwo: eventConfig.dayTwo,
     })
@@ -857,7 +841,7 @@ export async function createEvaluationRound(input: {
   // `event_date` decides which attendance rows make a team judgeable, so it has
   // to be one of the two configured days. A `check` cannot reach across to
   // `event_config`, so the constraint lives here — the same shape
-  // `scanAttendance` uses to validate a scan date.
+  // `event_config.attendance_day` is pinned to for scans.
   const [cfg] = await db
     .select({ dayOne: eventConfig.dayOne, dayTwo: eventConfig.dayTwo })
     .from(eventConfig)
@@ -970,65 +954,6 @@ export async function setTeamStatus(teamId: string, status: ReviewStatus) {
   revalidatePath("/dashboard");
   revalidatePath("/dashboard/leaderboard");
   return team;
-}
-
-export async function scanAttendance(
-  attendanceCode: string,
-  eventDate?: string,
-) {
-  const admin = await requireAdminRole(["volunteer", "super_admin"]);
-
-  // The date is part of a UNIQUE key, so an arbitrary string here would let a
-  // volunteer mint a second "present" row for the same member on a day the
-  // event does not run. Only the two configured days are accepted.
-  const [cfg] = await db
-    .select({ dayOne: eventConfig.dayOne, dayTwo: eventConfig.dayTwo })
-    .from(eventConfig)
-    .where(eq(eventConfig.id, 1))
-    .limit(1);
-  if (!cfg) throw new Error("Event configuration is not initialized");
-
-  const dateValue = eventDate ?? todayInIst();
-  if (dateValue !== cfg.dayOne && dateValue !== cfg.dayTwo) {
-    throw new Error(
-      `Attendance can only be marked on ${cfg.dayOne} or ${cfg.dayTwo}`,
-    );
-  }
-
-  const [member] = await db
-    .select()
-    .from(members)
-    .where(eq(members.attendanceCode, attendanceCode.trim()))
-    .limit(1);
-
-  if (!member) throw new Error("Invalid attendance code");
-
-  const [team] = await db
-    .select()
-    .from(teams)
-    .where(eq(teams.id, member.teamId))
-    .limit(1);
-
-  if (!team) throw new Error("Team not found for member");
-
-  const [row] = await db
-    .insert(attendance)
-    .values({
-      memberId: member.id,
-      eventDate: dateValue,
-      scannedBy: admin.id,
-    })
-    .onConflictDoNothing({
-      target: [attendance.memberId, attendance.eventDate],
-    })
-    .returning();
-
-  return {
-    member,
-    team,
-    alreadyPresent: !row,
-    attendance: row ?? null,
-  };
 }
 
 export async function getAdminAnnouncements() {

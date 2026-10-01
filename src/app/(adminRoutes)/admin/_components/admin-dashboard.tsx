@@ -1,8 +1,9 @@
 "use client";
 
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useMemo, useState } from "react";
-import { reviewSubmission, scanAttendance, setTeamStatus } from "@/app/actions";
+import { reviewSubmission, setTeamStatus } from "@/app/actions";
 
 type ReviewData = {
   admin: {
@@ -63,7 +64,6 @@ export function AdminDashboard({ data }: { data: ReviewData }) {
   );
   const [query, setQuery] = useState("");
   const [remarks, setRemarks] = useState("");
-  const [attendanceCode, setAttendanceCode] = useState("");
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
   const [pending, setPending] = useState(false);
@@ -127,17 +127,6 @@ export function AdminDashboard({ data }: { data: ReviewData }) {
       () => setTeamStatus(selectedTeam.id, status),
       `Team ${status.replaceAll("_", " ")}.`,
     );
-  }
-
-  function handleAttendance() {
-    if (!attendanceCode.trim()) {
-      setError("Enter an attendance code.");
-      return;
-    }
-    return run(
-      () => scanAttendance(attendanceCode),
-      "Attendance recorded or was already present.",
-    ).then(() => setAttendanceCode(""));
   }
 
   const canReview = data.admin.role === "super_admin";
@@ -380,27 +369,14 @@ export function AdminDashboard({ data }: { data: ReviewData }) {
                       <section className="border border-[#17201d]/15 bg-white p-5">
                         <h3 className="text-lg font-semibold">Attendance</h3>
                         <p className="mt-1 text-sm text-[#17201d]/55">
-                          Scan a member code at the event desk.
+                          Scan a team pass at the event desk.
                         </p>
-                        <input
-                          value={attendanceCode}
-                          onChange={(event) =>
-                            setAttendanceCode(event.target.value)
-                          }
-                          onKeyDown={(event) => {
-                            if (event.key === "Enter") void handleAttendance();
-                          }}
-                          placeholder="Attendance code"
-                          className="mt-5 w-full border border-[#17201d]/20 px-3 py-2 text-sm"
-                        />
-                        <button
-                          type="button"
-                          disabled={pending}
-                          onClick={() => void handleAttendance()}
-                          className="mt-3 w-full border border-[#17201d] px-4 py-3 text-sm disabled:opacity-50"
+                        <Link
+                          href="/admin/attendance"
+                          className="mt-5 block w-full border border-[#17201d] px-4 py-3 text-center text-sm"
                         >
-                          Mark attendance
-                        </button>
+                          Open scanner
+                        </Link>
                       </section>
                     )}
                   </div>

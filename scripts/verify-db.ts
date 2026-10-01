@@ -9,7 +9,6 @@ const expected = [
   "teams",
   "members",
   "submissions",
-  "payments",
   "attendance",
   "evaluation_rounds",
   "scores",

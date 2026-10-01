@@ -88,6 +88,13 @@ export const teams = pgTable(
       .notNull()
       .default("unpaid"),
     paymentId: varchar("payment_id", { length: 255 }).unique(),
+    /**
+     * The team's door pass: one QR per team, printed on the receipt. Minted in
+     * the same transaction that marks the team paid, so a paid team always has
+     * one (`teams_paid_has_attendance_code`). A volunteer scans it, then ticks
+     * which members are present.
+     */
+    attendanceCode: varchar("attendance_code", { length: 128 }).unique(),
     reviewedBy: uuid("reviewed_by").references(() => admins.id, {
       onDelete: "set null",
     }),
@@ -101,6 +108,10 @@ export const teams = pgTable(
   },
   (t) => [
     check("teams_name_not_blank", sql`length(trim(${t.teamName})) > 0`),
+    check(
+      "teams_paid_has_attendance_code",
+      sql`${t.paymentStatus} <> 'paid' OR ${t.attendanceCode} IS NOT NULL`,
+    ),
     index("teams_track_id_idx").on(t.trackId),
     index("teams_status_idx").on(t.status),
     index("teams_payment_status_idx").on(t.paymentStatus),
@@ -125,7 +136,6 @@ export const members = pgTable(
     facultyPhone: varchar("faculty_phone", { length: 20 }).notNull(),
     facultyEmail: varchar("faculty_email", { length: 255 }).notNull(),
     isLeader: boolean("is_leader").notNull().default(false),
-    attendanceCode: varchar("attendance_code", { length: 128 }).unique(),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
       .defaultNow(),
@@ -153,7 +163,7 @@ export const evaluationRounds = pgTable(
      * a team judgeable, so it has to be stored rather than derived: a `check`
      * cannot reach into `event_config` to compare against `day_one`/`day_two`.
      * That comparison lives in `createEvaluationRound`, the same way
-     * `scanAttendance` validates a scan date.
+     * `event_config.attendance_day` pins a scan date.
      */
     eventDate: date("event_date").notNull(),
     isActive: boolean("is_active").notNull().default(false),
@@ -418,6 +428,13 @@ export const eventConfig = pgTable(
      */
     dayOne: date("day_one").notNull(),
     dayTwo: date("day_two").notNull(),
+    /**
+     * Which event day the door scanner is open for; NULL = closed. A super
+     * admin flips it at `/admin/event`. Scans are filed under this date, not
+     * the wall clock, and it must be `day_one` or `day_two` so a scan always
+     * lines up with a round's `event_date`.
+     */
+    attendanceDay: date("attendance_day"),
     updatedAt: timestamp("updated_at", { withTimezone: true })
       .notNull()
       .defaultNow(),
@@ -430,6 +447,10 @@ export const eventConfig = pgTable(
     ),
     check("event_config_fee_nonnegative", sql`${t.registrationFee} >= 0`),
     check("event_config_day_order", sql`${t.dayOne} <= ${t.dayTwo}`),
+    check(
+      "event_config_attendance_day_is_event_day",
+      sql`${t.attendanceDay} IS NULL OR ${t.attendanceDay} IN (${t.dayOne}, ${t.dayTwo})`,
+    ),
     check(
       "event_config_submission_before_day_one",
       sql`${t.submissionDeadline} <= ${t.dayOne}`,
