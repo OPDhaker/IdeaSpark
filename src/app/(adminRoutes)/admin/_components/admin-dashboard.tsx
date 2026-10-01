@@ -3,6 +3,17 @@
 import Link from "next/link";
 import { useMemo, useState } from "react";
 import { reviewSubmission, setTeamStatus } from "@/app/actions";
+import { Badge } from "@/components/ui/badge";
+import {
+  DEFAULT_FILTERS,
+  type TeamFilters as Filters,
+  filterTeams,
+  sortTeams,
+  summarize,
+  type TeamSort,
+} from "../_lib/team-filters";
+import { AdminOverview } from "./admin-overview";
+import { TeamFilters } from "./team-filters";
 
 type ReviewData = {
   admin: {
@@ -18,7 +29,9 @@ type ReviewData = {
     status: "pending_submission" | "in_review" | "rejected" | "accepted";
     paymentStatus: "unpaid" | "paid";
     paymentId: string | null;
+    createdAt: Date;
   }>;
+  tracks: Array<{ id: string; name: string; isActive: boolean }>;
   rounds: Array<{
     id: string;
     name: string;
@@ -55,12 +68,20 @@ type ReviewData = {
   }>;
 };
 
+const statusVariant = {
+  pending_submission: "outline",
+  in_review: "secondary",
+  accepted: "default",
+  rejected: "destructive",
+} as const;
+
 export function AdminDashboard({ data }: { data: ReviewData }) {
   const [selectedTeamId, setSelectedTeamId] = useState(data.teams[0]?.id ?? "");
   const [selectedRoundId, setSelectedRoundId] = useState(
     data.rounds.find((round) => round.isActive)?.id ?? data.rounds[0]?.id ?? "",
   );
-  const [query, setQuery] = useState("");
+  const [filters, setFilters] = useState<Filters>(DEFAULT_FILTERS);
+  const [sort, setSort] = useState<TeamSort>("newest");
   const [remarks, setRemarks] = useState("");
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
@@ -76,14 +97,23 @@ export function AdminDashboard({ data }: { data: ReviewData }) {
     (member) => member.teamId === selectedTeamId,
   );
   const visibleTeams = useMemo(
-    () =>
-      data.teams.filter((team) =>
-        `${team.teamName} ${team.trackName ?? ""}`
-          .toLowerCase()
-          .includes(query.toLowerCase()),
-      ),
-    [data.teams, query],
+    () => sortTeams(filterTeams(data.teams, filters), sort),
+    [data.teams, filters, sort],
   );
+  const summary = useMemo(
+    () => summarize(data.teams, data.tracks),
+    [data.teams, data.tracks],
+  );
+
+  // An overview card names one slice outright, so it replaces the other
+  // filters rather than stacking on them. The search box is left alone.
+  function applySlice(slice: Partial<Filters>) {
+    setFilters((current) => ({
+      ...DEFAULT_FILTERS,
+      ...slice,
+      query: current.query,
+    }));
+  }
 
   function clearFeedback() {
     setNotice("");
@@ -155,8 +185,18 @@ export function AdminDashboard({ data }: { data: ReviewData }) {
           </div>
         )}
 
-        <div className="mt-6 grid gap-6 lg:grid-cols-[280px_1fr]">
-          <aside className="border border-[#17201d]/15 bg-white p-4">
+        <AdminOverview
+          counts={summary.counts}
+          trackRows={summary.trackRows}
+          filters={filters}
+          onApply={applySlice}
+        />
+
+        <div className="mt-6 grid gap-6 lg:grid-cols-[300px_1fr]">
+          {/* Only the team list scrolls. The aside is pinned to the viewport on
+              desktop (`self-start`, since a stretched grid item can't stick),
+              so the team pane beside it rides the page scroll. */}
+          <aside className="flex flex-col border border-[#17201d]/15 bg-white p-4 lg:sticky lg:top-6 lg:max-h-[calc(100dvh-3rem)] lg:self-start">
             <div className="flex items-center justify-between">
               <h2 className="font-semibold">Teams</h2>
               <span className="text-xs text-[#17201d]/50">
@@ -164,12 +204,23 @@ export function AdminDashboard({ data }: { data: ReviewData }) {
               </span>
             </div>
             <input
-              value={query}
-              onChange={(event) => setQuery(event.target.value)}
+              value={filters.query}
+              onChange={(event) =>
+                setFilters({ ...filters, query: event.target.value })
+              }
               placeholder="Search teams"
               className="mt-4 w-full border border-[#17201d]/20 px-3 py-2 text-sm outline-none focus:border-[#55705c]"
             />
-            <div className="mt-4 space-y-1">
+            <TeamFilters
+              filters={filters}
+              sort={sort}
+              tracks={data.tracks}
+              shown={visibleTeams.length}
+              total={data.teams.length}
+              onChange={setFilters}
+              onSort={setSort}
+            />
+            <div className="mt-4 max-h-[60dvh] min-h-0 flex-1 space-y-1 overflow-y-auto overscroll-contain lg:max-h-none">
               {visibleTeams.map((team) => (
                 <button
                   key={team.id}
@@ -179,8 +230,19 @@ export function AdminDashboard({ data }: { data: ReviewData }) {
                 >
                   <span className="block font-medium">{team.teamName}</span>
                   <span className="mt-1 block text-xs text-[#17201d]/55">
-                    {team.trackName ?? "No track"} ·{" "}
-                    {team.status.replaceAll("_", " ")}
+                    {team.trackName ?? "No track"}
+                  </span>
+                  <span className="mt-1.5 flex flex-wrap gap-1">
+                    <Badge variant={statusVariant[team.status]}>
+                      {team.status.replaceAll("_", " ")}
+                    </Badge>
+                    <Badge
+                      variant={
+                        team.paymentStatus === "paid" ? "default" : "outline"
+                      }
+                    >
+                      {team.paymentStatus}
+                    </Badge>
                   </span>
                 </button>
               ))}

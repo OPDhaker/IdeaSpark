@@ -974,68 +974,80 @@ export async function getAdminReviewData() {
     "volunteer",
   ]);
 
-  const [teamRows, roundRows, submissionRows, memberRows, scoreRows] =
-    await Promise.all([
-      db
-        .select({
-          id: teams.id,
-          teamName: teams.teamName,
-          trackId: teams.trackId,
-          trackName: tracks.name,
-          status: teams.status,
-          paymentStatus: teams.paymentStatus,
-          paymentId: teams.paymentId,
-          createdAt: teams.createdAt,
-        })
-        .from(teams)
-        .leftJoin(tracks, eq(teams.trackId, tracks.id))
-        .orderBy(teams.createdAt),
-      db
-        .select({
-          id: evaluationRounds.id,
-          name: evaluationRounds.name,
-          description: evaluationRounds.description,
-          sequenceNo: evaluationRounds.sequenceNo,
-          isActive: evaluationRounds.isActive,
-        })
-        .from(evaluationRounds)
-        .orderBy(evaluationRounds.sequenceNo),
-      db
-        .select({
-          id: submissions.id,
-          teamId: submissions.teamId,
-          roundId: submissions.roundId,
-          title: submissions.title,
-          description: submissions.description,
-          driveLink: submissions.driveLink,
-          status: submissions.status,
-          remarks: submissions.remarks,
-          submittedAt: submissions.submittedAt,
-        })
-        .from(submissions)
-        .orderBy(submissions.updatedAt),
-      db
-        .select({
-          id: members.id,
-          teamId: members.teamId,
-          name: members.name,
-          raNumber: members.raNumber,
-          netId: members.netId,
-          isLeader: members.isLeader,
-        })
-        .from(members)
-        .orderBy(members.createdAt),
-      db
-        .select({
-          id: scores.id,
-          teamId: scores.teamId,
-          roundId: scores.roundId,
-          evaluatorId: scores.evaluatorId,
-          score: scores.score,
-          remarks: scores.remarks,
-        })
-        .from(scores),
-    ]);
+  const [
+    teamRows,
+    roundRows,
+    submissionRows,
+    memberRows,
+    scoreRows,
+    trackRows,
+  ] = await Promise.all([
+    db
+      .select({
+        id: teams.id,
+        teamName: teams.teamName,
+        trackId: teams.trackId,
+        trackName: tracks.name,
+        status: teams.status,
+        paymentStatus: teams.paymentStatus,
+        paymentId: teams.paymentId,
+        createdAt: teams.createdAt,
+      })
+      .from(teams)
+      .leftJoin(tracks, eq(teams.trackId, tracks.id))
+      .orderBy(teams.createdAt),
+    db
+      .select({
+        id: evaluationRounds.id,
+        name: evaluationRounds.name,
+        description: evaluationRounds.description,
+        sequenceNo: evaluationRounds.sequenceNo,
+        isActive: evaluationRounds.isActive,
+      })
+      .from(evaluationRounds)
+      .orderBy(evaluationRounds.sequenceNo),
+    db
+      .select({
+        id: submissions.id,
+        teamId: submissions.teamId,
+        roundId: submissions.roundId,
+        title: submissions.title,
+        description: submissions.description,
+        driveLink: submissions.driveLink,
+        status: submissions.status,
+        remarks: submissions.remarks,
+        submittedAt: submissions.submittedAt,
+      })
+      .from(submissions)
+      .orderBy(submissions.updatedAt),
+    db
+      .select({
+        id: members.id,
+        teamId: members.teamId,
+        name: members.name,
+        raNumber: members.raNumber,
+        netId: members.netId,
+        isLeader: members.isLeader,
+      })
+      .from(members)
+      .orderBy(members.createdAt),
+    db
+      .select({
+        id: scores.id,
+        teamId: scores.teamId,
+        roundId: scores.roundId,
+        evaluatorId: scores.evaluatorId,
+        score: scores.score,
+        remarks: scores.remarks,
+      })
+      .from(scores),
+    // Every track, not just the ones teams picked, so the overview can show
+    // a track nobody has chosen yet.
+    db
+      .select({ id: tracks.id, name: tracks.name, isActive: tracks.isActive })
+      .from(tracks)
+      .orderBy(tracks.name),
+  ]);
 
   return {
     admin: { id: admin.id, name: admin.name, role: admin.role },
@@ -1044,5 +1056,6 @@ export async function getAdminReviewData() {
     submissions: submissionRows,
     members: memberRows,
     scores: scoreRows,
+    tracks: trackRows,
   };
 }
