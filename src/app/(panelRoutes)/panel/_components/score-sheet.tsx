@@ -1,7 +1,6 @@
 "use client";
 
 import { Check, Eye, Loader2 } from "lucide-react";
-import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { upsertScore } from "@/actions/panel";
 import { Button } from "@/components/ui/button";
@@ -67,7 +66,6 @@ export function ScoreSheet({
   /** The panel that owns this team, for the read-only explanation. */
   panelName: string | null;
 }) {
-  const router = useRouter();
   const [draft, setDraft] = useState<Draft>(() => toDraft(myScore));
   const [remarks, setRemarks] = useState(myScore?.remarks ?? "");
   const [pending, setPending] = useState(false);
@@ -110,7 +108,6 @@ export function ScoreSheet({
         remarks,
       });
       setSaved(true);
-      router.refresh();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Could not save.");
     } finally {

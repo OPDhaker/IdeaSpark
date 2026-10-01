@@ -41,7 +41,6 @@ export function PanelsAdmin({ data }: { data: PanelAdminData }) {
     try {
       await action();
       setNotice(message);
-      router.refresh();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Action failed.");
     } finally {

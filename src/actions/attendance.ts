@@ -88,7 +88,7 @@ export async function setAttendanceDay(slot: "day_one" | "day_two" | null) {
     .returning({ attendanceDay: eventConfig.attendanceDay });
   if (!config) throw new Error("Event configuration is not initialized");
 
-  await log(admin.id, "attendance.open", "event_config", "1", {
+  log(admin.id, "attendance.open", "event_config", "1", {
     attendanceDay: config.attendanceDay,
   });
   revalidatePath("/admin/event");
@@ -151,12 +151,12 @@ export async function setTeamAttendance(input: {
   });
 
   if (result.marked.length)
-    await log(admin.id, "attendance.mark", "team", teamId, {
+    log(admin.id, "attendance.mark", "team", teamId, {
       eventDate,
       memberIds: result.marked,
     });
   if (result.unmarked.length)
-    await log(admin.id, "attendance.unmark", "team", teamId, {
+    log(admin.id, "attendance.unmark", "team", teamId, {
       eventDate,
       memberIds: result.unmarked,
     });

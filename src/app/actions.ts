@@ -229,7 +229,7 @@ export async function createTeam(
     throw error;
   }
 
-  await log(user.id, "team.create", "team", team.team.id, { trackId });
+  log(user.id, "team.create", "team", team.team.id, { trackId });
   revalidatePath("/dashboard");
   revalidatePath("/register");
   return { ok: true, teamId: team.team.id };
@@ -334,7 +334,7 @@ export async function addMember(input: MemberInput) {
   if (!team) throw new Error("Create your team first");
 
   const member = await addMemberAtomically(team.id, input);
-  await log(user.id, "team.member.add", "team", team.id, {
+  log(user.id, "team.member.add", "team", team.id, {
     memberId: member.id,
   });
   revalidatePath("/dashboard");
@@ -348,7 +348,7 @@ export async function removeMember(memberId: string) {
   await assertBefore("registrationDeadline");
 
   const member = await removeMemberAtomically(team.id, memberId);
-  await log(user.id, "team.member.remove", "team", team.id, {
+  log(user.id, "team.member.remove", "team", team.id, {
     memberId: member.id,
   });
   revalidatePath("/dashboard");
@@ -420,7 +420,7 @@ export async function submitSubmission(
     driveLink: driveLink.trim(),
   });
 
-  await log(user.id, "submission.submit", "submission", submission.id, {
+  log(user.id, "submission.submit", "submission", submission.id, {
     roundId,
   });
   revalidatePath("/dashboard");
@@ -678,7 +678,7 @@ export async function submitPaymentId(paymentId: string) {
     };
   }
 
-  await log(user.id, "payment.id.submit", "team", team.id);
+  log(user.id, "payment.id.submit", "team", team.id);
   revalidatePath("/dashboard");
   revalidatePath("/dashboard/receipt");
   revalidatePath("/dashboard/team-details");
@@ -779,7 +779,7 @@ export async function updateEventConfig(input: {
     .where(eq(eventConfig.id, 1))
     .returning();
   if (!config) throw new Error("Event configuration is not initialized");
-  await log(admin.id, "config.update", "event_config", "1");
+  log(admin.id, "config.update", "event_config", "1");
   revalidatePath("/admin");
   return config;
 }
@@ -799,7 +799,7 @@ export async function setLeaderboardPublished(published: boolean) {
     .returning();
   if (!config) throw new Error("Event configuration is not initialized");
 
-  await log(admin.id, "leaderboard.publish", "event_config", "1", {
+  log(admin.id, "leaderboard.publish", "event_config", "1", {
     published,
   });
   revalidatePath("/admin/event");
@@ -861,7 +861,7 @@ export async function createEvaluationRound(input: {
       eventDate: input.eventDate,
     })
     .returning();
-  await log(admin.id, "round.create", "round", round.id, {
+  log(admin.id, "round.create", "round", round.id, {
     sequenceNo: input.sequenceNo,
     slug,
   });
@@ -895,7 +895,7 @@ export async function setActiveEvaluationRound(
       .where(eq(evaluationRounds.id, roundId));
   });
 
-  await log(admin.id, "round.activate", "round", roundId, { isActive });
+  log(admin.id, "round.activate", "round", roundId, { isActive });
   revalidatePath("/admin");
   revalidatePath("/dashboard/leaderboard");
 }
@@ -909,7 +909,7 @@ export async function createAnnouncement(title: string, body: string) {
       body: body.trim(),
     })
     .returning();
-  await log(admin.id, "announcement.create", "announcement", announcement.id);
+  log(admin.id, "announcement.create", "announcement", announcement.id);
   revalidatePath("/");
   return announcement;
 }
@@ -926,7 +926,7 @@ export async function reviewSubmission(
     adminId: admin.id,
     remarks,
   });
-  await log(admin.id, `submission.${status}`, "submission", submissionId, {
+  log(admin.id, `submission.${status}`, "submission", submissionId, {
     teamId: team.id,
     remarks,
   });
@@ -949,7 +949,7 @@ export async function setTeamStatus(teamId: string, status: ReviewStatus) {
     status,
     adminId: admin.id,
   });
-  await log(admin.id, "team.status.override", "team", teamId, { status });
+  log(admin.id, "team.status.override", "team", teamId, { status });
   revalidatePath("/admin");
   revalidatePath("/dashboard");
   revalidatePath("/dashboard/leaderboard");

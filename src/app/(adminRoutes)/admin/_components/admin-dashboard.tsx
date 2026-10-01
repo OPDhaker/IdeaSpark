@@ -1,7 +1,6 @@
 "use client";
 
 import Link from "next/link";
-import { useRouter } from "next/navigation";
 import { useMemo, useState } from "react";
 import { reviewSubmission, setTeamStatus } from "@/app/actions";
 
@@ -57,7 +56,6 @@ type ReviewData = {
 };
 
 export function AdminDashboard({ data }: { data: ReviewData }) {
-  const router = useRouter();
   const [selectedTeamId, setSelectedTeamId] = useState(data.teams[0]?.id ?? "");
   const [selectedRoundId, setSelectedRoundId] = useState(
     data.rounds.find((round) => round.isActive)?.id ?? data.rounds[0]?.id ?? "",
@@ -101,7 +99,6 @@ export function AdminDashboard({ data }: { data: ReviewData }) {
     try {
       await operation();
       setNotice(successMessage);
-      router.refresh();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Action failed.");
     } finally {

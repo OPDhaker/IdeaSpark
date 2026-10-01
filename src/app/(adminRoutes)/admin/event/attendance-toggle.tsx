@@ -1,7 +1,6 @@
 "use client";
 
 import { DoorClosed, DoorOpen, Loader2 } from "lucide-react";
-import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { setAttendanceDay } from "@/actions/attendance";
 import { Button } from "@/components/ui/button";
@@ -33,7 +32,6 @@ export function AttendanceToggle({
   dayOne: string;
   dayTwo: string;
 }) {
-  const router = useRouter();
   const [pending, setPending] = useState<Slot | "close" | undefined>();
   const [error, setError] = useState("");
 
@@ -49,7 +47,6 @@ export function AttendanceToggle({
     setError("");
     try {
       await setAttendanceDay(slot);
-      router.refresh();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Could not save.");
     } finally {

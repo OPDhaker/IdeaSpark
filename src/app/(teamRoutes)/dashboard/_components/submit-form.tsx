@@ -3,7 +3,6 @@
 import { zodResolver } from "@hookform/resolvers/zod";
 import { FileUp, LoaderCircle } from "lucide-react";
 import Image from "next/image";
-import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
@@ -36,7 +35,6 @@ const schema = z.object({
 type Values = z.infer<typeof schema>;
 
 export function SubmitForm({ roundId }: { roundId: string }) {
-  const router = useRouter();
   const [formError, setFormError] = useState<string | null>(null);
 
   const form = useForm<Values>({
@@ -51,7 +49,6 @@ export function SubmitForm({ roundId }: { roundId: string }) {
     setFormError(null);
     try {
       await submitSubmission(roundId, values.title, "", values.driveLink);
-      router.refresh();
     } catch (cause) {
       setFormError(
         cause instanceof Error

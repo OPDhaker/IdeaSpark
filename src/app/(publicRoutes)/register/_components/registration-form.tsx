@@ -191,7 +191,6 @@ export function RegistrationForm({
         // Nothing to clean up if storage is unavailable.
       }
       router.push("/dashboard");
-      router.refresh();
     } catch (cause) {
       console.error("Registration failed:", cause);
       setFormError(

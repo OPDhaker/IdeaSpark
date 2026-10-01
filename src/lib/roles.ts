@@ -1,4 +1,5 @@
 import { eq, sql } from "drizzle-orm";
+import { cache } from "react";
 import { db } from "@/db";
 import { admins } from "@/db/schema";
 import { auth } from "@/lib/auth/server";
@@ -19,41 +20,44 @@ import { auth } from "@/lib/auth/server";
  * credential linked onto an admin's user revokes admin rather than granting
  * it — failing closed is the right direction here.
  */
-async function hasTrustedIdentity(userId: string): Promise<boolean> {
-  const { rows } = await db.execute<{
-    has_google: boolean | null;
-    has_password: boolean | null;
-  }>(sql`
-    SELECT
-      bool_or("providerId" = 'google') AS has_google,
-      bool_or(password IS NOT NULL)   AS has_password
-    FROM neon_auth.account
-    WHERE "userId" = ${userId}::uuid
-  `);
-
-  const row = rows[0];
-  return row?.has_google === true && row.has_password !== true;
+function trustedIdentityColumns(userId: string) {
+  return {
+    hasGoogle: sql<boolean | null>`(
+      SELECT bool_or("providerId" = 'google')
+      FROM neon_auth.account WHERE "userId" = ${userId}::uuid
+    )`,
+    hasPassword: sql<boolean | null>`(
+      SELECT bool_or(password IS NOT NULL)
+      FROM neon_auth.account WHERE "userId" = ${userId}::uuid
+    )`,
+  };
 }
 
-export async function getAdminActor() {
+/**
+ * `cache()` makes this one lookup per render: the admin layout and the page
+ * under it both ask, and each ask is a database round trip.
+ *
+ * The admin row and the identity check travel in one query for the same
+ * reason. It is still "admin row, then trusted identity" — a session whose
+ * email matches no admin returns no row and never reaches the second half.
+ */
+export const getAdminActor = cache(async () => {
   const { data: session } = await auth.getSession();
   const email = session?.user?.email?.trim().toLowerCase();
   const userId = session?.user?.id;
   if (!email || !userId) return null;
 
-  // Cheap path first: most sessions are not admins at all, and that costs one
-  // query either way. Only pay for the identity check once the email matches.
-  const [admin] = await db
-    .select()
+  const [row] = await db
+    .select({ admin: admins, ...trustedIdentityColumns(userId) })
     .from(admins)
     .where(eq(admins.email, email))
     .limit(1);
 
-  if (!admin) return null;
-  if (!(await hasTrustedIdentity(userId))) return null;
+  if (!row) return null;
+  if (row.hasGoogle !== true || row.hasPassword === true) return null;
 
-  return admin;
-}
+  return row.admin;
+});
 
 export async function isAdmin(): Promise<boolean> {
   return Boolean(await getAdminActor());
