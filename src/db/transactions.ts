@@ -463,67 +463,61 @@ export async function upsertPanelScoreAtomically(input: {
       sql`SELECT pg_advisory_xact_lock(hashtext(${input.teamId}))`,
     );
 
-    const [round] = await tx
-      .select({
-        id: evaluationRounds.id,
-        eventDate: evaluationRounds.eventDate,
-      })
-      .from(evaluationRounds)
-      .where(eq(evaluationRounds.id, input.roundId))
-      .limit(1);
+    // Every gate in one round trip. The lock above is its own statement on
+    // purpose: a statement reads from the snapshot taken when it starts, so
+    // folding the lock into this SELECT could read past a writer that held
+    // the lock and committed while we waited for it.
+    const { rows } = await tx.execute<{
+      round_exists: boolean;
+      judge_panel_id: string | null;
+      assigned_panel_id: string | null;
+      team_exists: boolean;
+      status: (typeof teams.$inferSelect)["status"] | null;
+      payment_status: (typeof teams.$inferSelect)["paymentStatus"] | null;
+      present: boolean;
+    }>(sql`
+      SELECT
+        r.id IS NOT NULL AS round_exists,
+        (
+          SELECT pm.panel_id FROM panel_members pm
+          WHERE pm.admin_id = ${input.evaluatorId}
+        ) AS judge_panel_id,
+        (
+          SELECT tpa.panel_id FROM team_panel_assignments tpa
+          WHERE tpa.team_id = ${input.teamId}
+            AND tpa.round_id = ${input.roundId}
+        ) AS assigned_panel_id,
+        t.id IS NOT NULL AS team_exists,
+        t.status,
+        t.payment_status,
+        -- Judging happens in the room. A team nobody scanned on this round's
+        -- day did not turn up for it, and a score against it would be invented.
+        EXISTS (
+          SELECT 1
+          FROM attendance a
+          JOIN members m ON m.id = a.member_id
+          WHERE m.team_id = ${input.teamId}
+            AND a.event_date = r.event_date
+        ) AS present
+      FROM (SELECT 1) AS one
+      LEFT JOIN evaluation_rounds r ON r.id = ${input.roundId}
+      LEFT JOIN teams t ON t.id = ${input.teamId}
+    `);
 
-    if (!round) throw new Error("Evaluation round not found");
-
-    const [panelMember] = await tx
-      .select({ panelId: panelMembers.panelId })
-      .from(panelMembers)
-      .where(eq(panelMembers.adminId, input.evaluatorId))
-      .limit(1);
-
-    if (!panelMember)
+    const gate = rows[0];
+    if (!gate?.round_exists) throw new Error("Evaluation round not found");
+    if (!gate.judge_panel_id)
       throw new Error(
         "You are not on a judging panel. Ask an admin to add you.",
       );
-
-    const [assignment] = await tx
-      .select({ panelId: teamPanelAssignments.panelId })
-      .from(teamPanelAssignments)
-      .where(
-        and(
-          eq(teamPanelAssignments.teamId, input.teamId),
-          eq(teamPanelAssignments.roundId, input.roundId),
-        ),
-      )
-      .limit(1);
-
-    if (!assignment || assignment.panelId !== panelMember.panelId)
+    if (gate.assigned_panel_id !== gate.judge_panel_id)
       throw new Error("This team is not assigned to your panel for this round");
-
-    const [team] = await tx
-      .select({ status: teams.status, paymentStatus: teams.paymentStatus })
-      .from(teams)
-      .where(eq(teams.id, input.teamId))
-      .limit(1);
-
-    if (!team) throw new Error("Team not found");
-    if (team.status !== "accepted")
+    if (!gate.team_exists) throw new Error("Team not found");
+    if (gate.status !== "accepted")
       throw new Error("Only accepted teams can be scored");
-    if (team.paymentStatus !== "paid")
+    if (gate.payment_status !== "paid")
       throw new Error("Only teams that have paid can be scored");
-
-    // Judging happens in the room. A team nobody scanned on this round's day
-    // did not turn up for it, and a score against it would be invented.
-    const { rows: present } = await tx.execute<{ present: boolean }>(sql`
-      SELECT EXISTS (
-        SELECT 1
-        FROM attendance a
-        JOIN members m ON m.id = a.member_id
-        WHERE m.team_id = ${input.teamId}
-          AND a.event_date = ${round.eventDate}
-      ) AS present
-    `);
-
-    if (!present[0]?.present)
+    if (!gate.present)
       throw new Error("This team has not been marked present for this round");
 
     const values = {
