@@ -402,27 +402,43 @@ export async function reviewSubmissionAtomically(input: {
 /**
  * super_admin escape hatch. The normal path is `submitIdeaAtomically` /
  * `reviewSubmissionAtomically`; this exists to correct a mistake or to reopen a
- * team, including for the next round. Resetting to `pending_submission` also
- * clears the active round's submission so the team can actually submit again.
+ * team, including for the next round.
+ *
+ * It keeps the team and its active-round submission in step, so an override
+ * can't leave a team "accepted" over a submission still "in review". The reason
+ * is required and lands in `submissions.remarks`, where a rejected team reads
+ * it. Reopening also clears the deck, so the dashboard offers the upload form
+ * instead of the old submission.
+ *
+ * A paid team can't be rejected or reopened: the dashboard shows passes to any
+ * paid team first, so the change would be invisible to them, and payment
+ * already locks the roster.
  */
 export async function overrideTeamStatusAtomically(input: {
   teamId: string;
-  status: ReviewStatus;
+  status: "accepted" | "rejected" | "pending_submission";
   adminId: string;
+  reason: string;
 }) {
+  const reason = input.reason.trim();
+  if (!reason) throw new Error("Give a reason for the override");
+
   return db.transaction(async (tx) => {
     await tx.execute(
       sql`SELECT pg_advisory_xact_lock(hashtext(${input.teamId}))`,
     );
 
     const [existing] = await tx
-      .select({ id: teams.id })
+      .select({ id: teams.id, paymentStatus: teams.paymentStatus })
       .from(teams)
       .where(eq(teams.id, input.teamId))
       .for("update")
       .limit(1);
 
     if (!existing) throw new Error("Team not found");
+    if (existing.paymentStatus === "paid" && input.status !== "accepted") {
+      throw new Error("This team has paid, so its status is locked");
+    }
 
     const now = new Date();
 
@@ -439,34 +455,60 @@ export async function overrideTeamStatusAtomically(input: {
 
     if (!team) throw new Error("Failed to update the team");
 
-    if (input.status === "pending_submission") {
-      const [activeRound] = await tx
-        .select({ id: evaluationRounds.id })
-        .from(evaluationRounds)
-        .where(eq(evaluationRounds.isActive, true))
-        .limit(1);
+    const [activeRound] = await tx
+      .select({ id: evaluationRounds.id })
+      .from(evaluationRounds)
+      .where(eq(evaluationRounds.isActive, true))
+      .limit(1);
 
-      if (activeRound) {
-        await tx
-          .update(submissions)
-          .set({
-            status: "pending_submission",
-            submittedAt: null,
-            reviewedBy: null,
-            reviewedAt: null,
-            remarks: null,
-            updatedAt: now,
-          })
-          .where(
-            and(
-              eq(submissions.teamId, input.teamId),
-              eq(submissions.roundId, activeRound.id),
-            ),
-          );
-      }
+    // No active round, or no submission in it: the team-only change above is
+    // the whole override (e.g. accepting a team that never submitted).
+    if (!activeRound) return { team, previousLink: null };
+
+    const inActiveRound = and(
+      eq(submissions.teamId, input.teamId),
+      eq(submissions.roundId, activeRound.id),
+    );
+
+    const [previous] = await tx
+      .select({ driveLink: submissions.driveLink })
+      .from(submissions)
+      .where(inActiveRound)
+      .for("update")
+      .limit(1);
+
+    if (input.status === "pending_submission") {
+      await tx
+        .update(submissions)
+        .set({
+          status: "pending_submission",
+          title: null,
+          driveLink: null,
+          driveLinkStatus: null,
+          driveLinkName: null,
+          driveLinkModifiedAt: null,
+          driveLinkCheckedAt: null,
+          submittedAt: null,
+          reviewedBy: null,
+          reviewedAt: null,
+          remarks: null,
+          updatedAt: now,
+        })
+        .where(inActiveRound);
+    } else {
+      await tx
+        .update(submissions)
+        .set({
+          status: input.status,
+          reviewedBy: input.adminId,
+          reviewedAt: now,
+          remarks: reason,
+          updatedAt: now,
+        })
+        .where(inActiveRound);
     }
 
-    return team;
+    return { team, previousLink: previous?.driveLink ?? null };
   });
 }
 

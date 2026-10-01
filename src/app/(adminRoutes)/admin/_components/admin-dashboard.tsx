@@ -17,6 +17,7 @@ import {
 import { AdminOverview } from "./admin-overview";
 import { DriveLinkStatus } from "./drive-link-status";
 import { TeamFilters } from "./team-filters";
+import { TeamOverride } from "./team-override";
 
 type ReviewData = {
   admin: {
@@ -116,6 +117,12 @@ export function AdminDashboard({ data }: { data: ReviewData }) {
       ),
     [data.submissions, selectedRoundId],
   );
+  const activeRound = data.rounds.find((round) => round.isActive) ?? null;
+  const activeSubmission = data.submissions.find(
+    (submission) =>
+      submission.teamId === selectedTeamId &&
+      submission.roundId === activeRound?.id,
+  );
   const selectedMembers = data.members.filter(
     (member) => member.teamId === selectedTeamId,
   );
@@ -152,8 +159,10 @@ export function AdminDashboard({ data }: { data: ReviewData }) {
     try {
       await operation();
       setNotice(successMessage);
+      return true;
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Action failed.");
+      return false;
     } finally {
       setPending(false);
     }
@@ -188,13 +197,16 @@ export function AdminDashboard({ data }: { data: ReviewData }) {
 
   // Teams and submissions share one lifecycle enum, so a team is `accepted`,
   // never `approved`. See `reviewStatusEnum` in src/db/schema.ts.
-  function handleTeamStatus(
+  async function handleOverride(
     status: "accepted" | "rejected" | "pending_submission",
+    reason: string,
   ) {
-    if (!selectedTeam) return;
+    if (!selectedTeam) return false;
     return run(
-      () => setTeamStatus(selectedTeam.id, status),
-      `Team ${status.replaceAll("_", " ")}.`,
+      () => setTeamStatus(selectedTeam.id, status, reason),
+      status === "pending_submission"
+        ? "Team reopened for resubmission."
+        : `Team force ${status}.`,
     );
   }
 
@@ -324,26 +336,6 @@ export function AdminDashboard({ data }: { data: ReviewData }) {
                       </p>
                     ) : null}
                   </div>
-                  {canReview && (
-                    <div className="flex flex-wrap gap-2">
-                      <button
-                        type="button"
-                        disabled={pending}
-                        onClick={() => handleTeamStatus("accepted")}
-                        className="border border-[#55705c] px-3 py-2 text-sm text-[#315c38] disabled:opacity-50"
-                      >
-                        Approve team
-                      </button>
-                      <button
-                        type="button"
-                        disabled={pending}
-                        onClick={() => handleTeamStatus("rejected")}
-                        className="border border-[#a24b3d] px-3 py-2 text-sm text-[#8a352a] disabled:opacity-50"
-                      >
-                        Reject team
-                      </button>
-                    </div>
-                  )}
                 </div>
 
                 <div className="mt-6 grid gap-6 xl:grid-cols-[1.2fr_0.8fr]">
@@ -463,6 +455,20 @@ export function AdminDashboard({ data }: { data: ReviewData }) {
                         <p className="mt-5 border border-dashed border-[#17201d]/20 p-5 text-sm text-[#17201d]/55">
                           No submission for this round.
                         </p>
+                      )}
+                      {canReview && (
+                        <TeamOverride
+                          key={selectedTeam.id}
+                          team={selectedTeam}
+                          roundName={activeRound?.name ?? null}
+                          hasSubmission={
+                            !!activeSubmission &&
+                            activeSubmission.status !== "pending_submission"
+                          }
+                          submissionDeadline={data.submissionDeadline}
+                          pending={pending}
+                          onConfirm={handleOverride}
+                        />
                       )}
                     </section>
 

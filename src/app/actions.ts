@@ -19,7 +19,6 @@ import {
 import {
   addMemberAtomically,
   overrideTeamStatusAtomically,
-  type ReviewStatus,
   registerTeamWithMembers,
   removeMemberAtomically,
   reviewSubmissionAtomically,
@@ -957,18 +956,28 @@ export async function reviewSubmission(
 
 /**
  * Manual override. The normal way a team changes state is the team submitting
- * (`submitSubmission`) and an admin deciding (`reviewSubmission`) — use this
- * only to correct a mistake or to reopen a team, which also clears the active
- * round's submission.
+ * (`submitSubmission`) and an admin deciding (`reviewSubmission`). Use this
+ * only to correct a mistake or to reopen a team; the transaction keeps the
+ * active round's submission in step and refuses paid teams.
  */
-export async function setTeamStatus(teamId: string, status: ReviewStatus) {
+export async function setTeamStatus(
+  teamId: string,
+  status: "accepted" | "rejected" | "pending_submission",
+  reason: string,
+) {
   const admin = await requireAdminRole(["super_admin"]);
-  const team = await overrideTeamStatusAtomically({
+  const { team, previousLink } = await overrideTeamStatusAtomically({
     teamId,
     status,
     adminId: admin.id,
+    reason,
   });
-  log(admin.id, "team.status.override", "team", teamId, { status });
+  // A reopen clears the deck link, so the log is the only place it survives.
+  log(admin.id, "team.status.override", "team", teamId, {
+    status,
+    reason: reason.trim(),
+    previousLink,
+  });
   revalidatePath("/admin");
   revalidatePath("/dashboard");
   revalidatePath("/dashboard/leaderboard");
