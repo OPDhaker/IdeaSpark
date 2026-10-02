@@ -2,6 +2,7 @@
 
 import {
   ClipboardList,
+  Download,
   LayoutDashboard,
   LogOut,
   ScanLine,
@@ -49,6 +50,12 @@ const NAV = [
     href: "/admin/event",
     label: "Event controls",
     icon: Settings2,
+    roles: ["super_admin"],
+  },
+  {
+    href: "/admin/export",
+    label: "Export teams",
+    icon: Download,
     roles: ["super_admin"],
   },
 ] satisfies Array<{
