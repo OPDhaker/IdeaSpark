@@ -6,6 +6,7 @@ import { z } from "zod";
 import { db } from "@/db";
 import {
   findTeamByAttendanceCode,
+  getDayTwoQualifiers,
   getTeamAttendanceRoster,
 } from "@/db/queries";
 import { eventConfig } from "@/db/schema";
@@ -37,9 +38,13 @@ async function getAttendanceConfig() {
  * open from saving.
  */
 async function resolveScanDate() {
-  const { attendanceDay } = await getAttendanceConfig();
+  const { attendanceDay, dayOne, dayTwo } = await getAttendanceConfig();
   if (!attendanceDay) throw new Error("Attendance is closed");
-  return attendanceDay;
+  return {
+    eventDate: attendanceDay,
+    dayOne,
+    isDayTwo: attendanceDay === dayTwo,
+  };
 }
 
 export type TeamAttendance = {
@@ -50,6 +55,11 @@ export type TeamAttendance = {
    * Informational: `false` sends the desk to check by hand, it blocks nothing.
    */
   paymentVerified: boolean;
+  /**
+   * Day 2 only: whether the team made the Day 1 cut. `null` on Day 1, where
+   * there is no cut. A `not_qualified` team cannot be marked in.
+   */
+  qualification: "qualified" | "not_qualified" | null;
   members: Awaited<ReturnType<typeof getTeamAttendanceRoster>>;
 };
 
@@ -112,17 +122,27 @@ export async function lookupTeamAttendance(
   const parsed = codeSchema.safeParse(code);
   if (!parsed.success) throw new Error("Invalid attendance code");
 
-  const eventDate = await resolveScanDate();
+  const { eventDate, dayOne, isDayTwo } = await resolveScanDate();
   const team = await findTeamByAttendanceCode(parsed.data);
   if (!team) throw new Error("Invalid attendance code");
   if (team.paymentStatus !== "paid")
     throw new Error("This team has not paid yet");
 
+  const [qualifiers, members] = await Promise.all([
+    isDayTwo ? getDayTwoQualifiers(dayOne) : null,
+    getTeamAttendanceRoster(team.id, eventDate),
+  ]);
+
   return {
     eventDate,
     team: { id: team.id, teamName: team.teamName, trackName: team.trackName },
     paymentVerified: isPaymentVerified(team.paymentId),
-    members: await getTeamAttendanceRoster(team.id, eventDate),
+    qualification: qualifiers
+      ? qualifiers.has(team.id)
+        ? "qualified"
+        : "not_qualified"
+      : null,
+    members,
   };
 }
 
@@ -147,7 +167,10 @@ export async function setTeamAttendance(input: {
   if (!parsed.success) throw new Error("Invalid attendance update");
 
   const { teamId, changes } = parsed.data;
-  const eventDate = await resolveScanDate();
+  const { eventDate, dayOne, isDayTwo } = await resolveScanDate();
+  // The real Day 2 gate; the sheet only hides the roster.
+  if (isDayTwo && !(await getDayTwoQualifiers(dayOne)).has(teamId))
+    throw new Error("Not qualified for ISD-2");
 
   const result = await setTeamAttendanceAtomically({
     teamId,

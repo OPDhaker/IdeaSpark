@@ -41,7 +41,10 @@ export default async function ReceiptPage() {
   // The QR payload is the raw team attendance_code, because that is exactly
   // what lookupTeamAttendance() looks up. Wrapping it in a URL would break the
   // scanner.
-  const code = receipt.team.attendanceCode;
+  // A team that missed the Day 1 cut gets no pass on Day 2, so there is
+  // nothing to scan.
+  const notShortlisted = receipt.qualified === false;
+  const code = notShortlisted ? null : receipt.team.attendanceCode;
   const qr = code
     ? await QRCode.toString(code, {
         type: "svg",
@@ -103,7 +106,11 @@ export default async function ReceiptPage() {
           </h2>
 
           <div className="receipt-pass mt-5 flex flex-col gap-3">
-            {qr ? (
+            {notShortlisted ? (
+              <p className="text-center">
+                Not shortlisted for ISD-2 | no Day 2 pass.
+              </p>
+            ) : qr ? (
               <>
                 <div
                   aria-hidden

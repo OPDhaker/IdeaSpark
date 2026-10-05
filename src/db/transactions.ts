@@ -552,6 +552,7 @@ export async function upsertPanelScoreAtomically(input: {
     // the lock and committed while we waited for it.
     const { rows } = await tx.execute<{
       round_exists: boolean;
+      scoring_closed: boolean | null;
       judge_panel_id: string | null;
       judge_panel_type: PanelType | null;
       assigned_panel_id: string | null;
@@ -562,6 +563,7 @@ export async function upsertPanelScoreAtomically(input: {
     }>(sql`
       SELECT
         r.id IS NOT NULL AS round_exists,
+        r.scoring_closed,
         jp.panel_id AS judge_panel_id,
         jp.type AS judge_panel_type,
         (
@@ -595,6 +597,8 @@ export async function upsertPanelScoreAtomically(input: {
 
     const gate = rows[0];
     if (!gate?.round_exists) throw new Error("Evaluation round not found");
+    if (gate.scoring_closed)
+      throw new Error("Scoring for this round is closed");
     if (!gate.judge_panel_id || !gate.judge_panel_type)
       throw new Error(
         "You are not on a judging panel. Ask an admin to add you.",

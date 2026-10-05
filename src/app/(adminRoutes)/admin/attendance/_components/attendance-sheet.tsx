@@ -1,6 +1,6 @@
 "use client";
 
-import { BadgeCheck, CheckCheck, TriangleAlert } from "lucide-react";
+import { BadgeCheck, Ban, CheckCheck, TriangleAlert } from "lucide-react";
 import { useState, useTransition } from "react";
 import { toast } from "sonner";
 import { setTeamAttendance, type TeamAttendance } from "@/actions/attendance";
@@ -80,6 +80,7 @@ export function AttendanceSheet({
         onSaved(members);
         onOpenChange(false);
       }}
+      onClose={() => onOpenChange(false)}
     />
   );
 
@@ -114,10 +115,12 @@ function SheetBody({
   data,
   isMobile,
   onDone,
+  onClose,
 }: {
   data: TeamAttendance;
   isMobile: boolean;
   onDone: (members: Member[]) => void;
+  onClose: () => void;
 }) {
   const [checked, setChecked] = useState(
     () => new Set(data.members.filter((m) => m.present).map((m) => m.id)),
@@ -187,7 +190,22 @@ function SheetBody({
     </p>
   );
 
-  const list = (
+  const qualification =
+    data.qualification === "qualified" ? (
+      <p className="flex items-center gap-2 rounded-md border border-primary/30 bg-primary/5 px-3 py-2 text-sm font-medium text-primary">
+        <BadgeCheck aria-hidden className="size-4 shrink-0" />
+        Qualified for ISD-2
+      </p>
+    ) : data.qualification === "not_qualified" ? (
+      <p className="flex items-center gap-2 rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm font-medium text-destructive">
+        <Ban aria-hidden className="size-4 shrink-0" />
+        Not qualified | do not admit
+      </p>
+    ) : null;
+  // The server refuses the save too; hiding the roster keeps the door honest.
+  const blocked = data.qualification === "not_qualified";
+
+  const list = blocked ? null : (
     <ItemGroup className="gap-2">
       {data.members.map((member) => {
         const id = `attendance-${member.id}`;
@@ -235,7 +253,11 @@ function SheetBody({
     </ItemGroup>
   );
 
-  const actions = (
+  const actions = blocked ? (
+    <Button size="lg" variant="outline" onClick={onClose}>
+      Close
+    </Button>
+  ) : (
     <>
       <Button
         size="lg"
@@ -264,6 +286,7 @@ function SheetBody({
       <>
         <div className="flex flex-col gap-3 overflow-y-auto px-4">
           {payment}
+          {qualification}
           {list}
         </div>
         <DrawerFooter>{actions}</DrawerFooter>
@@ -274,6 +297,7 @@ function SheetBody({
   return (
     <>
       {payment}
+      {qualification}
       {list}
       <DialogFooter className="sm:flex-row-reverse sm:justify-start">
         {actions}

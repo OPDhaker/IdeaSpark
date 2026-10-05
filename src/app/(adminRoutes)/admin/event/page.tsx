@@ -1,6 +1,7 @@
 import { getEventControls } from "@/app/actions";
 import { AttendanceToggle } from "./attendance-toggle";
 import { LeaderboardToggle } from "./leaderboard-toggle";
+import { ScoringToggle } from "./scoring-toggle";
 
 export const dynamic = "force-dynamic";
 
@@ -31,6 +32,13 @@ export default async function AdminEventPage() {
               attendanceDay={config.attendanceDay}
               dayOne={config.dayOne}
               dayTwo={config.dayTwo}
+            />
+            <ScoringToggle
+              rounds={config.rounds.map((round) => ({
+                id: round.id,
+                name: round.name,
+                scoringClosed: round.scoringClosed,
+              }))}
             />
             <LeaderboardToggle published={config.leaderboardPublished} />
           </>

@@ -13,6 +13,7 @@ import { db } from "./index";
 import {
   admins,
   attendance,
+  DAY_TWO_QUALIFIERS,
   departments,
   evaluationRounds,
   eventConfig,
@@ -505,6 +506,34 @@ export async function getEventConfig() {
     .where(eq(eventConfig.id, 1))
     .limit(1);
   return config ?? null;
+}
+
+/**
+ * The teams through to Day 2: the top `DAY_TWO_QUALIFIERS` day totals of the
+ * round that ran on `day_one`, plus anyone tied with the last of them. Ranks
+ * every scored team whether or not both panel types are in, because Day 1 ran
+ * with no Type 2 panel at all, so no team there is ever `complete`. A team
+ * nobody scored does not qualify. Live, so a Day 1 score edited later moves
+ * the line.
+ */
+export async function getDayTwoQualifiers(dayOne: string) {
+  const [round] = await db
+    .select({ id: evaluationRounds.id })
+    .from(evaluationRounds)
+    .where(eq(evaluationRounds.eventDate, dayOne))
+    .limit(1);
+  if (!round) return new Set<string>();
+
+  const ranked = (await getPanelLeaderboardRows(round.id)).sort(
+    (a, b) => Number(b.dayTotal) - Number(a.dayTotal),
+  );
+  const last = ranked[DAY_TWO_QUALIFIERS - 1];
+  const cutoff = last ? Number(last.dayTotal) : Number.NEGATIVE_INFINITY;
+  return new Set(
+    ranked
+      .filter((row) => Number(row.dayTotal) >= cutoff)
+      .map((row) => row.teamId),
+  );
 }
 
 export async function getActiveRound() {

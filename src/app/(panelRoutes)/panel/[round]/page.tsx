@@ -40,7 +40,11 @@ export default async function PanelRoundPage({
       <div>
         <p className="flex items-center gap-2 text-muted-foreground text-xs uppercase tracking-[0.12em]">
           {sheet.round.name}
-          {sheet.round.isActive ? <Badge>Live</Badge> : null}
+          {sheet.round.scoringClosed ? (
+            <Badge variant="secondary">Closed</Badge>
+          ) : sheet.round.isActive ? (
+            <Badge>Live</Badge>
+          ) : null}
         </p>
       </div>
       <div className="flex items-center gap-4">
@@ -149,6 +153,7 @@ export default async function PanelRoundPage({
             myScore={sheet.myScore}
             peerScores={peers}
             canScore={current.canScore}
+            closed={sheet.round.scoringClosed}
             panelName={current.panelName}
           />
         </div>

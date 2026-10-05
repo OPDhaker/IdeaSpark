@@ -186,6 +186,12 @@ export const evaluationRounds = pgTable(
      */
     eventDate: date("event_date").notNull(),
     isActive: boolean("is_active").notNull().default(false),
+    /**
+     * Set once a round is judged: no score in it can be saved or changed.
+     * Kept apart from `isActive`, which also drives deck submissions and the
+     * team dashboard.
+     */
+    scoringClosed: boolean("scoring_closed").notNull().default(false),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
       .defaultNow(),
@@ -324,6 +330,12 @@ export const DAY_MAX = SCORE_CRITERIA.reduce((sum, c) => sum + c.max, 0);
 
 /** The final leaderboard is the mean of the day totals, so it keeps the scale. */
 export const FINAL_MAX = DAY_MAX;
+
+/**
+ * How many Day 1 teams go through to Day 2. Ranked live on the Day 1 round's
+ * day totals; a tie at the line lets every tied team through.
+ */
+export const DAY_TWO_QUALIFIERS = 16;
 
 export const scores = pgTable(
   "scores",

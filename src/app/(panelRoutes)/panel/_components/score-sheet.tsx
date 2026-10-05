@@ -1,6 +1,6 @@
 "use client";
 
-import { Check, Eye, Loader2 } from "lucide-react";
+import { Check, Eye, Loader2, Lock } from "lucide-react";
 import { useEffect, useState } from "react";
 import { upsertScore } from "@/actions/panel";
 import { Button } from "@/components/ui/button";
@@ -49,6 +49,7 @@ export function ScoreSheet({
   myScore,
   peerScores,
   canScore,
+  closed,
   panelName,
 }: {
   roundId: string;
@@ -65,6 +66,8 @@ export function ScoreSheet({
    * the rubric behind a number is the point of looking.
    */
   canScore: boolean;
+  /** The round's scoring is closed: every score in it is final. */
+  closed: boolean;
   /** The panel that owns this team, for the read-only explanation. */
   panelName: string | null;
 }) {
@@ -83,6 +86,7 @@ export function ScoreSheet({
     setError("");
   }, [panelType, myScore]);
 
+  const editable = canScore && !closed;
   const criteria = PANEL_TYPES[panelType].criteria;
   const max = panelMax(panelType);
   const values = criteria.map((criterion) => ({
@@ -98,7 +102,7 @@ export function ScoreSheet({
   const total = complete ? values.reduce((sum, v) => sum + v.value, 0) : null;
 
   async function save() {
-    if (!canScore || !complete || !inRange) return;
+    if (!editable || !complete || !inRange) return;
     setPending(true);
     setError("");
     try {
@@ -146,8 +150,8 @@ export function ScoreSheet({
                   step="0.5"
                   value={criterion.raw}
                   aria-invalid={over}
-                  readOnly={!canScore}
-                  disabled={!canScore}
+                  readOnly={!editable}
+                  disabled={!editable}
                   onChange={(event) =>
                     setDraft((current) => ({
                       ...current,
@@ -174,10 +178,10 @@ export function ScoreSheet({
             id="remarks"
             rows={4}
             value={remarks}
-            readOnly={!canScore}
-            disabled={!canScore}
+            readOnly={!editable}
+            disabled={!editable}
             placeholder={
-              canScore ? `What stood out about ${teamName}?` : "No remarks"
+              editable ? `What stood out about ${teamName}?` : "No remarks"
             }
             onChange={(event) => setRemarks(event.target.value)}
           />
@@ -203,7 +207,7 @@ export function ScoreSheet({
             */}
             <Button
               type="submit"
-              disabled={!canScore || !complete || !inRange || pending}
+              disabled={!editable || !complete || !inRange || pending}
             >
               {pending ? (
                 <Loader2 aria-hidden className="size-4 animate-spin" />
@@ -213,14 +217,19 @@ export function ScoreSheet({
           </div>
         </div>
 
-        {canScore && !complete ? (
+        {editable && !complete ? (
           <p className="text-muted-foreground text-xs">
             {criteria.length === 1
               ? `Fill ${criteria[0].label} to save.`
               : `Fill all ${criteria.length} criteria to save.`}
           </p>
         ) : null}
-        {!canScore ? (
+        {closed ? (
+          <p className="flex items-start gap-2 text-muted-foreground text-xs">
+            <Lock aria-hidden className="mt-0.5 size-3.5 shrink-0" />
+            Scoring for this round is closed. Scores are final.
+          </p>
+        ) : !canScore ? (
           <p className="flex items-start gap-2 text-muted-foreground text-xs">
             <Eye aria-hidden className="mt-0.5 size-3.5 shrink-0" />
             Read-only.{" "}

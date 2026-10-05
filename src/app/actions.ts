@@ -3,7 +3,11 @@
 import { and, count, eq, inArray, or, sql } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { db } from "@/db";
-import { getLeaderboard, listEvaluationRounds } from "@/db/queries";
+import {
+  getDayTwoQualifiers,
+  getLeaderboard,
+  listEvaluationRounds,
+} from "@/db/queries";
 import {
   admins,
   announcements,
@@ -640,10 +644,27 @@ export async function getReceipt() {
   ]);
 
   const [cfg] = await db
-    .select({ dayOne: eventConfig.dayOne, dayTwo: eventConfig.dayTwo })
+    .select({
+      dayOne: eventConfig.dayOne,
+      dayTwo: eventConfig.dayTwo,
+      attendanceDay: eventConfig.attendanceDay,
+    })
     .from(eventConfig)
     .where(eq(eventConfig.id, 1))
     .limit(1);
+
+  // From the moment Day 2 starts (its scanner opens, or the IST calendar gets
+  // there), only Day 1 qualifiers keep a pass. Before that every paid team
+  // needs theirs, and a half-judged Day 1 must not take anyone's away.
+  const today = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Kolkata",
+  }).format(new Date());
+  const dayTwoStarted =
+    !!cfg?.dayTwo && (cfg.attendanceDay === cfg.dayTwo || today >= cfg.dayTwo);
+  const qualified =
+    dayTwoStarted && cfg?.dayOne
+      ? (await getDayTwoQualifiers(cfg.dayOne)).has(team.id)
+      : null;
 
   return {
     team,
@@ -651,6 +672,8 @@ export async function getReceipt() {
     members: passes,
     dayOne: cfg?.dayOne ?? null,
     dayTwo: cfg?.dayTwo ?? null,
+    /** `null` until Day 2 starts; after that, whether the team made the cut. */
+    qualified,
   };
 }
 
@@ -832,17 +855,20 @@ export async function setLeaderboardPublished(published: boolean) {
 
 export async function getEventControls() {
   await requireAdminRole(["super_admin"]);
-  const [cfg] = await db
-    .select({
-      leaderboardPublished: eventConfig.leaderboardPublished,
-      attendanceDay: eventConfig.attendanceDay,
-      dayOne: eventConfig.dayOne,
-      dayTwo: eventConfig.dayTwo,
-    })
-    .from(eventConfig)
-    .where(eq(eventConfig.id, 1))
-    .limit(1);
-  return cfg ?? null;
+  const [[cfg], rounds] = await Promise.all([
+    db
+      .select({
+        leaderboardPublished: eventConfig.leaderboardPublished,
+        attendanceDay: eventConfig.attendanceDay,
+        dayOne: eventConfig.dayOne,
+        dayTwo: eventConfig.dayTwo,
+      })
+      .from(eventConfig)
+      .where(eq(eventConfig.id, 1))
+      .limit(1),
+    listEvaluationRounds(),
+  ]);
+  return cfg ? { ...cfg, rounds } : null;
 }
 
 export async function createEvaluationRound(input: {

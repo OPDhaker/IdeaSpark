@@ -16,6 +16,7 @@ import {
 } from "@/db/queries";
 import {
   admins,
+  evaluationRounds,
   PANEL_TYPE_KEYS,
   PANEL_TYPES,
   type PanelType,
@@ -397,6 +398,26 @@ export async function assignTeamsToPanel(
  * Bulk assignment by track. Two or more panels split the track evenly; see
  * `assignTrackToPanelsAtomically` for how.
  */
+/**
+ * Closes a round's scoring once it is judged, or reopens it. Closed, no judge
+ * can save or change a score in it; `upsertPanelScoreAtomically` refuses, and
+ * the sheet goes read-only.
+ */
+export async function setRoundScoringClosed(roundId: string, closed: boolean) {
+  const admin = await requireAdminRole(["super_admin"]);
+  const [round] = await db
+    .update(evaluationRounds)
+    .set({ scoringClosed: closed })
+    .where(eq(evaluationRounds.id, roundId))
+    .returning({ slug: evaluationRounds.slug });
+  if (!round) throw new Error("Round not found");
+
+  log(admin.id, "round.scoring", "round", roundId, { closed });
+  revalidatePath("/admin/event");
+  revalidatePath("/panel", "layout");
+  return { closed };
+}
+
 export async function assignTrackToPanels(
   roundId: string,
   trackId: string,
