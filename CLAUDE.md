@@ -27,6 +27,8 @@ doppler run -- bun run db:migrate    # apply migrations in ./drizzle
 doppler run -- bun run db:push       # push schema straight to the branch (dev only)
 doppler run -- bun run db:seed       # scripts/seed.ts — departments, tracks, event_config, bootstrap admin
 doppler run -- bun run db:verify     # scripts/verify-db.ts — asserts the 13 expected tables exist
+
+bun run payments:generate            # payment_links.xlsx → src/lib/verified-payment-ids.ts (no DB, no doppler)
 ```
 
 No test framework is installed. `bun run db:verify` (and `scripts/verify-db.sql` for indexes/constraints) is the only automated check beyond `lint` and `build`.
@@ -105,6 +107,8 @@ Four distinct layers; keep them separate:
 
 ### Razorpay payment link
 The accepted-team dashboard embeds the hosted Payment Page at `https://pages.razorpay.com/pl_TdZFxdVedyavh5/view`. After paying, the team leader submits the Razorpay payment ID. `submitPaymentId` stores it on `teams.payment_id`; `submitTeamPaymentIdAtomically` marks the team paid and mints attendance codes in the same transaction. Payment IDs are unique across teams. There are no Razorpay API keys, SDK, order routes, signature verification, or webhook requirements. **Submitting an ID immediately unlocks paid features and is not proof of payment.**
+
+The only check against Razorpay happens at the attendance desk, and it is offline. `payment_links.xlsx` (the Payment Page export, repo root, **gitignored** — it holds payer emails and phones) is turned into `src/lib/verified-payment-ids.ts` by `bun run payments:generate`; a row counts only if it is `captured` for the full ₹200. `scanAttendance` returns `paymentVerified` from `isPaymentVerified()` (`src/lib/payment-verification.ts`) and the desk shows "Payment verified" or "Please manually verify". It is informational — attendance is recorded either way — and it is only as fresh as the last export, so a new sheet means regenerate, commit and redeploy. Keep the ID list server-side.
 
 ### Judging panel (`/panel`)
 The only place a score is written. `/admin` has no scoring form — one code path means one rubric and no way to bypass panel assignment.

@@ -29,6 +29,7 @@ import {
 } from "@/db/transactions";
 import { log } from "@/lib/audit";
 import { auth } from "@/lib/auth/server";
+import { isPaymentVerified } from "@/lib/payment-verification";
 import { getAdminActor, requireAdminRole } from "@/lib/roles";
 import {
   MAX_MEMBERS,
@@ -1028,6 +1029,8 @@ export async function scanAttendance(
     team,
     alreadyPresent: !row,
     attendance: row ?? null,
+    // Informational only: the scan above is recorded either way.
+    paymentVerified: isPaymentVerified(team.paymentId),
   };
 }
 

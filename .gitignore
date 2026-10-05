@@ -33,6 +33,9 @@ yarn-error.log*
 # env files (can opt-in for committing if needed)
 .env*
 
+# Razorpay export: payer emails and phones. Only the generated ID list is committed.
+payment_links.xlsx
+
 # vercel
 .vercel
 

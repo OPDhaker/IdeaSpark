@@ -12,7 +12,8 @@
     "db:migrate": "bun scripts/migrate.ts",
     "db:push": "drizzle-kit push",
     "db:seed": "bun scripts/seed.ts",
-    "db:verify": "bun scripts/verify-db.ts"
+    "db:verify": "bun scripts/verify-db.ts",
+    "payments:generate": "bun scripts/generate-verified-payments.ts"
   },
   "dependencies": {
     "@hookform/resolvers": "^5.9.1",
@@ -49,6 +50,7 @@
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "drizzle-kit": "^1.0.0-rc.4",
+    "exceljs": "^4.4.0",
     "shadcn": "^4.21.0",
     "tailwindcss": "^4",
     "tsx": "^4.23.13",

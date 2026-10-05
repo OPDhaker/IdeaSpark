@@ -55,6 +55,13 @@ type ReviewData = {
   }>;
 };
 
+type ScanResult = {
+  memberName: string;
+  teamName: string;
+  alreadyPresent: boolean;
+  paymentVerified: boolean;
+};
+
 export function AdminDashboard({ data }: { data: ReviewData }) {
   const router = useRouter();
   const [selectedTeamId, setSelectedTeamId] = useState(data.teams[0]?.id ?? "");
@@ -64,6 +71,7 @@ export function AdminDashboard({ data }: { data: ReviewData }) {
   const [query, setQuery] = useState("");
   const [remarks, setRemarks] = useState("");
   const [attendanceCode, setAttendanceCode] = useState("");
+  const [scanResult, setScanResult] = useState<ScanResult | null>(null);
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
   const [pending, setPending] = useState(false);
@@ -129,15 +137,31 @@ export function AdminDashboard({ data }: { data: ReviewData }) {
     );
   }
 
-  function handleAttendance() {
+  // Not routed through `run()`: the desk needs the scan's result on screen, and
+  // `run()` throws it away.
+  async function handleAttendance() {
+    clearFeedback();
+    setScanResult(null);
     if (!attendanceCode.trim()) {
       setError("Enter an attendance code.");
       return;
     }
-    return run(
-      () => scanAttendance(attendanceCode),
-      "Attendance recorded or was already present.",
-    ).then(() => setAttendanceCode(""));
+    setPending(true);
+    try {
+      const result = await scanAttendance(attendanceCode);
+      setScanResult({
+        memberName: result.member.name,
+        teamName: result.team.teamName,
+        alreadyPresent: result.alreadyPresent,
+        paymentVerified: result.paymentVerified,
+      });
+      setAttendanceCode("");
+      router.refresh();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Action failed.");
+    } finally {
+      setPending(false);
+    }
   }
 
   const canReview = data.admin.role === "super_admin";
@@ -401,6 +425,26 @@ export function AdminDashboard({ data }: { data: ReviewData }) {
                         >
                           Mark attendance
                         </button>
+                        {scanResult && (
+                          <div className="mt-4 border-t border-[#17201d]/10 pt-4 text-sm">
+                            <p className="font-medium">
+                              {scanResult.memberName}
+                            </p>
+                            <p className="mt-1 text-[#17201d]/55">
+                              {scanResult.teamName} ·{" "}
+                              {scanResult.alreadyPresent
+                                ? "already marked present"
+                                : "attendance recorded"}
+                            </p>
+                            <p
+                              className={`mt-3 border px-3 py-2 font-medium ${scanResult.paymentVerified ? "border-[#73917a] bg-[#eaf2e9] text-[#315c38]" : "border-[#a24b3d] bg-[#fff1ed] text-[#8a352a]"}`}
+                            >
+                              {scanResult.paymentVerified
+                                ? "Payment verified"
+                                : "Please manually verify"}
+                            </p>
+                          </div>
+                        )}
                       </section>
                     )}
                   </div>
