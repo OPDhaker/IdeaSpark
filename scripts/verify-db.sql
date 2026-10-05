@@ -3,7 +3,7 @@ FROM information_schema.tables
 WHERE table_schema = 'public'
   AND table_name IN (
     'tracks','departments','admins','teams','members','submissions',
-    'payments','attendance','evaluation_rounds','scores','event_config',
+    'attendance','evaluation_rounds','scores','event_config',
     'announcements','audit_log'
   )
 ORDER BY table_name;

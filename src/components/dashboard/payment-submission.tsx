@@ -1,6 +1,5 @@
 "use client";
 
-import { useRouter } from "next/navigation";
 import { type FormEvent, useEffect, useState } from "react";
 import { submitPaymentId } from "@/app/actions";
 import { Button } from "@/components/ui/button";
@@ -15,7 +14,6 @@ declare global {
 const paymentPageUrl = "https://pages.razorpay.com/pl_TdZFxdVedyavh5/view";
 
 export function PaymentSubmission() {
-  const router = useRouter();
   const [paymentId, setPaymentId] = useState("");
   const [pending, setPending] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
@@ -49,7 +47,6 @@ export function PaymentSubmission() {
       }
 
       setMessage("Payment ID saved. Your passes are ready.");
-      router.refresh();
     } catch {
       setError("Could not save the payment ID. Please try again.");
       setPending(false);

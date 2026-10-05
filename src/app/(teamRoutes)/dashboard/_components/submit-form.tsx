@@ -1,9 +1,8 @@
 "use client";
 
 import { zodResolver } from "@hookform/resolvers/zod";
-import { FileUp, LoaderCircle } from "lucide-react";
+import { LoaderCircle } from "lucide-react";
 import Image from "next/image";
-import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
@@ -18,6 +17,8 @@ import {
   FormMessage,
 } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
+import { isDriveUrl } from "@/lib/drive";
+import { RestrictedLinkDialog } from "./restricted-link-dialog";
 
 /**
  * The title is not decoration: an admin reviewing a list of untitled Drive
@@ -30,14 +31,16 @@ const schema = z.object({
     .string()
     .trim()
     .min(1, "Paste the link to your deck.")
-    .pipe(z.url("That doesn't look like a link.")),
+    .pipe(z.url("That doesn't look like a link."))
+    .refine(isDriveUrl, "Paste a Google Drive or Slides link."),
 });
 
 type Values = z.infer<typeof schema>;
 
 export function SubmitForm({ roundId }: { roundId: string }) {
-  const router = useRouter();
   const [formError, setFormError] = useState<string | null>(null);
+  // The link the Drive check refused, held for the modal's "Open my deck".
+  const [restrictedLink, setRestrictedLink] = useState<string | null>(null);
 
   const form = useForm<Values>({
     resolver: zodResolver(schema),
@@ -50,8 +53,22 @@ export function SubmitForm({ roundId }: { roundId: string }) {
   async function onSubmit(values: Values) {
     setFormError(null);
     try {
-      await submitSubmission(roundId, values.title, "", values.driveLink);
-      router.refresh();
+      // One call checks the link and, if judges can open it, submits it. On
+      // success `revalidatePath` swaps this form for the submitted card.
+      const result = await submitSubmission(
+        roundId,
+        values.title,
+        "",
+        values.driveLink,
+      );
+      if (result.ok) {
+        setRestrictedLink(null);
+      } else if (result.reason === "restricted") {
+        setRestrictedLink(values.driveLink);
+      } else {
+        setRestrictedLink(null);
+        form.setError("driveLink", { message: result.message });
+      }
     } catch (cause) {
       setFormError(
         cause instanceof Error
@@ -80,10 +97,11 @@ export function SubmitForm({ roundId }: { roundId: string }) {
           </h2>
         </div>
         <p className="text-muted-foreground text-base">
-          Upload drive link and make sure it is set to "Everyone with this link
-          can view.".{" "}
+          Paste your deck&apos;s Drive link. In Drive, set it to Share | General
+          access | Anyone with the link | Viewer, or judges can&apos;t open it.
+          We check this when you submit.{" "}
           <span className="text-destructive font-medium">
-            This action cannot be undone. Pleae do it very carefully.
+            This action cannot be undone. Please do it very carefully.
           </span>
         </p>
 
@@ -136,10 +154,20 @@ export function SubmitForm({ roundId }: { roundId: string }) {
             {submitting ? (
               <LoaderCircle aria-hidden className="animate-spin" />
             ) : null}
-            {submitting ? "Submitting…" : "Submit idea"}
+            {submitting ? "Checking your link…" : "Submit idea"}
           </Button>
         </div>
       </form>
+
+      <RestrictedLinkDialog
+        open={restrictedLink !== null}
+        onOpenChange={(open) => {
+          if (!open) setRestrictedLink(null);
+        }}
+        link={restrictedLink ?? ""}
+        checking={submitting}
+        onCheckAgain={form.handleSubmit(onSubmit)}
+      />
     </Form>
   );
 }

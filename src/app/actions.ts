@@ -7,7 +7,6 @@ import { getLeaderboard } from "@/db/queries";
 import {
   admins,
   announcements,
-  attendance,
   departments,
   evaluationRounds,
   eventConfig,
@@ -20,7 +19,6 @@ import {
 import {
   addMemberAtomically,
   overrideTeamStatusAtomically,
-  type ReviewStatus,
   registerTeamWithMembers,
   removeMemberAtomically,
   reviewSubmissionAtomically,
@@ -29,7 +27,7 @@ import {
 } from "@/db/transactions";
 import { log } from "@/lib/audit";
 import { auth } from "@/lib/auth/server";
-import { isPaymentVerified } from "@/lib/payment-verification";
+import { checkDriveLink } from "@/lib/drive";
 import { getAdminActor, requireAdminRole } from "@/lib/roles";
 import {
   MAX_MEMBERS,
@@ -80,21 +78,6 @@ async function assertBefore(
     .limit(1);
   if (!cfg) throw new Error("Event configuration is not initialized");
   if (Date.now() > cfg[field].getTime()) throw new Error("Deadline passed");
-}
-
-/**
- * `YYYY-MM-DD` for "now" in Asia/Kolkata.
- *
- * Every `date` column here means a local calendar day, and the server runs in
- * UTC — comparing those directly would flip the day at 05:30 IST.
- */
-function todayInIst() {
-  return new Intl.DateTimeFormat("en-CA", {
-    timeZone: "Asia/Kolkata",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).format(new Date());
 }
 
 export async function getDepartments() {
@@ -246,7 +229,7 @@ export async function createTeam(
     throw error;
   }
 
-  await log(user.id, "team.create", "team", team.team.id, { trackId });
+  log(user.id, "team.create", "team", team.team.id, { trackId });
   revalidatePath("/dashboard");
   revalidatePath("/register");
   return { ok: true, teamId: team.team.id };
@@ -351,7 +334,7 @@ export async function addMember(input: MemberInput) {
   if (!team) throw new Error("Create your team first");
 
   const member = await addMemberAtomically(team.id, input);
-  await log(user.id, "team.member.add", "team", team.id, {
+  log(user.id, "team.member.add", "team", team.id, {
     memberId: member.id,
   });
   revalidatePath("/dashboard");
@@ -365,7 +348,7 @@ export async function removeMember(memberId: string) {
   await assertBefore("registrationDeadline");
 
   const member = await removeMemberAtomically(team.id, memberId);
-  await log(user.id, "team.member.remove", "team", team.id, {
+  log(user.id, "team.member.remove", "team", team.id, {
     memberId: member.id,
   });
   revalidatePath("/dashboard");
@@ -405,19 +388,24 @@ export async function submitSubmission(
   await assertBefore("submissionDeadline");
   const team = await getTeamFor(user.id);
   if (!team) throw new Error("Create your team first");
+  if (!driveLink.trim()) throw new Error("A submission link is required");
 
-  const [round] = await db
-    .select()
-    .from(evaluationRounds)
-    .where(eq(evaluationRounds.id, roundId))
-    .limit(1);
+  // The Drive check is a call to Google, so it runs alongside the reads rather
+  // than after them, and never inside the transaction below.
+  const [[round], [{ value: memberCount }], linkCheck] = await Promise.all([
+    db
+      .select()
+      .from(evaluationRounds)
+      .where(eq(evaluationRounds.id, roundId))
+      .limit(1),
+    db
+      .select({ value: count() })
+      .from(members)
+      .where(eq(members.teamId, team.id)),
+    checkDriveLink(driveLink),
+  ]);
   if (!round) throw new Error("Evaluation round not found");
   if (!round.isActive) throw new Error("This evaluation round is not active");
-
-  const [{ value: memberCount }] = await db
-    .select({ value: count() })
-    .from(members)
-    .where(eq(members.teamId, team.id));
 
   if (memberCount < MIN_MEMBERS) {
     throw new Error(
@@ -425,7 +413,14 @@ export async function submitSubmission(
     );
   }
 
-  if (!driveLink.trim()) throw new Error("A submission link is required");
+  // A bad link is an expected outcome the form branches on (field error vs the
+  // "restricted" modal), so it comes back as a value rather than a throw.
+  if (!linkCheck.ok) {
+    return { ok: false, reason: "invalid", message: linkCheck.error } as const;
+  }
+  if (linkCheck.status === "restricted") {
+    return { ok: false, reason: "restricted" } as const;
+  }
 
   // The status transition (submission + team, in one transaction) lives in the
   // transaction layer; the state guards are there too.
@@ -435,13 +430,19 @@ export async function submitSubmission(
     title: title.trim() || null,
     description: description.trim() || null,
     driveLink: driveLink.trim(),
+    driveLinkCheck: {
+      driveLinkStatus: linkCheck.status,
+      driveLinkName: linkCheck.name,
+      driveLinkModifiedAt: linkCheck.modifiedAt,
+      driveLinkCheckedAt: linkCheck.checkedAt,
+    },
   });
 
-  await log(user.id, "submission.submit", "submission", submission.id, {
+  log(user.id, "submission.submit", "submission", submission.id, {
     roundId,
   });
   revalidatePath("/dashboard");
-  return submission;
+  return { ok: true } as const;
 }
 
 export async function getMyTeam() {
@@ -610,8 +611,8 @@ export async function getTeamRoster() {
  * Everything on the printable pass strip. Returns null unless the team has
  * actually paid, so the route guard and the data fetch cannot disagree.
  *
- * One pass per member: `attendance_code` is minted per member on payment and
- * only the leader has a login, so the leader hands the passes out.
+ * One pass per team: `teams.attendance_code` is minted on payment. A volunteer
+ * scans it at the door, then marks each member present individually.
  */
 export async function getReceipt() {
   const user = await requireLead();
@@ -625,7 +626,6 @@ export async function getReceipt() {
         name: members.name,
         raNumber: members.raNumber,
         isLeader: members.isLeader,
-        attendanceCode: members.attendanceCode,
       })
       .from(members)
       .where(eq(members.teamId, team.id))
@@ -696,7 +696,7 @@ export async function submitPaymentId(paymentId: string) {
     };
   }
 
-  await log(user.id, "payment.id.submit", "team", team.id);
+  log(user.id, "payment.id.submit", "team", team.id);
   revalidatePath("/dashboard");
   revalidatePath("/dashboard/receipt");
   revalidatePath("/dashboard/team-details");
@@ -797,7 +797,7 @@ export async function updateEventConfig(input: {
     .where(eq(eventConfig.id, 1))
     .returning();
   if (!config) throw new Error("Event configuration is not initialized");
-  await log(admin.id, "config.update", "event_config", "1");
+  log(admin.id, "config.update", "event_config", "1");
   revalidatePath("/admin");
   return config;
 }
@@ -817,7 +817,7 @@ export async function setLeaderboardPublished(published: boolean) {
     .returning();
   if (!config) throw new Error("Event configuration is not initialized");
 
-  await log(admin.id, "leaderboard.publish", "event_config", "1", {
+  log(admin.id, "leaderboard.publish", "event_config", "1", {
     published,
   });
   revalidatePath("/admin/event");
@@ -831,6 +831,7 @@ export async function getEventControls() {
   const [cfg] = await db
     .select({
       leaderboardPublished: eventConfig.leaderboardPublished,
+      attendanceDay: eventConfig.attendanceDay,
       dayOne: eventConfig.dayOne,
       dayTwo: eventConfig.dayTwo,
     })
@@ -858,7 +859,7 @@ export async function createEvaluationRound(input: {
   // `event_date` decides which attendance rows make a team judgeable, so it has
   // to be one of the two configured days. A `check` cannot reach across to
   // `event_config`, so the constraint lives here — the same shape
-  // `scanAttendance` uses to validate a scan date.
+  // `event_config.attendance_day` is pinned to for scans.
   const [cfg] = await db
     .select({ dayOne: eventConfig.dayOne, dayTwo: eventConfig.dayTwo })
     .from(eventConfig)
@@ -878,7 +879,7 @@ export async function createEvaluationRound(input: {
       eventDate: input.eventDate,
     })
     .returning();
-  await log(admin.id, "round.create", "round", round.id, {
+  log(admin.id, "round.create", "round", round.id, {
     sequenceNo: input.sequenceNo,
     slug,
   });
@@ -912,7 +913,7 @@ export async function setActiveEvaluationRound(
       .where(eq(evaluationRounds.id, roundId));
   });
 
-  await log(admin.id, "round.activate", "round", roundId, { isActive });
+  log(admin.id, "round.activate", "round", roundId, { isActive });
   revalidatePath("/admin");
   revalidatePath("/dashboard/leaderboard");
 }
@@ -926,7 +927,7 @@ export async function createAnnouncement(title: string, body: string) {
       body: body.trim(),
     })
     .returning();
-  await log(admin.id, "announcement.create", "announcement", announcement.id);
+  log(admin.id, "announcement.create", "announcement", announcement.id);
   revalidatePath("/");
   return announcement;
 }
@@ -943,7 +944,7 @@ export async function reviewSubmission(
     adminId: admin.id,
     remarks,
   });
-  await log(admin.id, `submission.${status}`, "submission", submissionId, {
+  log(admin.id, `submission.${status}`, "submission", submissionId, {
     teamId: team.id,
     remarks,
   });
@@ -955,83 +956,32 @@ export async function reviewSubmission(
 
 /**
  * Manual override. The normal way a team changes state is the team submitting
- * (`submitSubmission`) and an admin deciding (`reviewSubmission`) — use this
- * only to correct a mistake or to reopen a team, which also clears the active
- * round's submission.
+ * (`submitSubmission`) and an admin deciding (`reviewSubmission`). Use this
+ * only to correct a mistake or to reopen a team; the transaction keeps the
+ * active round's submission in step and refuses paid teams.
  */
-export async function setTeamStatus(teamId: string, status: ReviewStatus) {
+export async function setTeamStatus(
+  teamId: string,
+  status: "accepted" | "rejected" | "pending_submission",
+  reason: string,
+) {
   const admin = await requireAdminRole(["super_admin"]);
-  const team = await overrideTeamStatusAtomically({
+  const { team, previousLink } = await overrideTeamStatusAtomically({
     teamId,
     status,
     adminId: admin.id,
+    reason,
   });
-  await log(admin.id, "team.status.override", "team", teamId, { status });
+  // A reopen clears the deck link, so the log is the only place it survives.
+  log(admin.id, "team.status.override", "team", teamId, {
+    status,
+    reason: reason.trim(),
+    previousLink,
+  });
   revalidatePath("/admin");
   revalidatePath("/dashboard");
   revalidatePath("/dashboard/leaderboard");
   return team;
-}
-
-export async function scanAttendance(
-  attendanceCode: string,
-  eventDate?: string,
-) {
-  const admin = await requireAdminRole(["volunteer", "super_admin"]);
-
-  // The date is part of a UNIQUE key, so an arbitrary string here would let a
-  // volunteer mint a second "present" row for the same member on a day the
-  // event does not run. Only the two configured days are accepted.
-  const [cfg] = await db
-    .select({ dayOne: eventConfig.dayOne, dayTwo: eventConfig.dayTwo })
-    .from(eventConfig)
-    .where(eq(eventConfig.id, 1))
-    .limit(1);
-  if (!cfg) throw new Error("Event configuration is not initialized");
-
-  const dateValue = eventDate ?? todayInIst();
-  if (dateValue !== cfg.dayOne && dateValue !== cfg.dayTwo) {
-    throw new Error(
-      `Attendance can only be marked on ${cfg.dayOne} or ${cfg.dayTwo}`,
-    );
-  }
-
-  const [member] = await db
-    .select()
-    .from(members)
-    .where(eq(members.attendanceCode, attendanceCode.trim()))
-    .limit(1);
-
-  if (!member) throw new Error("Invalid attendance code");
-
-  const [team] = await db
-    .select()
-    .from(teams)
-    .where(eq(teams.id, member.teamId))
-    .limit(1);
-
-  if (!team) throw new Error("Team not found for member");
-
-  const [row] = await db
-    .insert(attendance)
-    .values({
-      memberId: member.id,
-      eventDate: dateValue,
-      scannedBy: admin.id,
-    })
-    .onConflictDoNothing({
-      target: [attendance.memberId, attendance.eventDate],
-    })
-    .returning();
-
-  return {
-    member,
-    team,
-    alreadyPresent: !row,
-    attendance: row ?? null,
-    // Informational only: the scan above is recorded either way.
-    paymentVerified: isPaymentVerified(team.paymentId),
-  };
 }
 
 export async function getAdminAnnouncements() {
@@ -1052,68 +1002,90 @@ export async function getAdminReviewData() {
     "volunteer",
   ]);
 
-  const [teamRows, roundRows, submissionRows, memberRows, scoreRows] =
-    await Promise.all([
-      db
-        .select({
-          id: teams.id,
-          teamName: teams.teamName,
-          trackId: teams.trackId,
-          trackName: tracks.name,
-          status: teams.status,
-          paymentStatus: teams.paymentStatus,
-          paymentId: teams.paymentId,
-          createdAt: teams.createdAt,
-        })
-        .from(teams)
-        .leftJoin(tracks, eq(teams.trackId, tracks.id))
-        .orderBy(teams.createdAt),
-      db
-        .select({
-          id: evaluationRounds.id,
-          name: evaluationRounds.name,
-          description: evaluationRounds.description,
-          sequenceNo: evaluationRounds.sequenceNo,
-          isActive: evaluationRounds.isActive,
-        })
-        .from(evaluationRounds)
-        .orderBy(evaluationRounds.sequenceNo),
-      db
-        .select({
-          id: submissions.id,
-          teamId: submissions.teamId,
-          roundId: submissions.roundId,
-          title: submissions.title,
-          description: submissions.description,
-          driveLink: submissions.driveLink,
-          status: submissions.status,
-          remarks: submissions.remarks,
-          submittedAt: submissions.submittedAt,
-        })
-        .from(submissions)
-        .orderBy(submissions.updatedAt),
-      db
-        .select({
-          id: members.id,
-          teamId: members.teamId,
-          name: members.name,
-          raNumber: members.raNumber,
-          netId: members.netId,
-          isLeader: members.isLeader,
-        })
-        .from(members)
-        .orderBy(members.createdAt),
-      db
-        .select({
-          id: scores.id,
-          teamId: scores.teamId,
-          roundId: scores.roundId,
-          evaluatorId: scores.evaluatorId,
-          score: scores.score,
-          remarks: scores.remarks,
-        })
-        .from(scores),
-    ]);
+  const [
+    teamRows,
+    roundRows,
+    submissionRows,
+    memberRows,
+    scoreRows,
+    trackRows,
+    [config],
+  ] = await Promise.all([
+    db
+      .select({
+        id: teams.id,
+        teamName: teams.teamName,
+        trackId: teams.trackId,
+        trackName: tracks.name,
+        status: teams.status,
+        paymentStatus: teams.paymentStatus,
+        paymentId: teams.paymentId,
+        createdAt: teams.createdAt,
+      })
+      .from(teams)
+      .leftJoin(tracks, eq(teams.trackId, tracks.id))
+      .orderBy(teams.createdAt),
+    db
+      .select({
+        id: evaluationRounds.id,
+        name: evaluationRounds.name,
+        description: evaluationRounds.description,
+        sequenceNo: evaluationRounds.sequenceNo,
+        isActive: evaluationRounds.isActive,
+      })
+      .from(evaluationRounds)
+      .orderBy(evaluationRounds.sequenceNo),
+    db
+      .select({
+        id: submissions.id,
+        teamId: submissions.teamId,
+        roundId: submissions.roundId,
+        title: submissions.title,
+        description: submissions.description,
+        driveLink: submissions.driveLink,
+        driveLinkStatus: submissions.driveLinkStatus,
+        driveLinkName: submissions.driveLinkName,
+        driveLinkModifiedAt: submissions.driveLinkModifiedAt,
+        driveLinkCheckedAt: submissions.driveLinkCheckedAt,
+        status: submissions.status,
+        remarks: submissions.remarks,
+        submittedAt: submissions.submittedAt,
+      })
+      .from(submissions)
+      .orderBy(submissions.updatedAt),
+    db
+      .select({
+        id: members.id,
+        teamId: members.teamId,
+        name: members.name,
+        raNumber: members.raNumber,
+        netId: members.netId,
+        isLeader: members.isLeader,
+      })
+      .from(members)
+      .orderBy(members.createdAt),
+    db
+      .select({
+        id: scores.id,
+        teamId: scores.teamId,
+        roundId: scores.roundId,
+        evaluatorId: scores.evaluatorId,
+        score: scores.score,
+        remarks: scores.remarks,
+      })
+      .from(scores),
+    // Every track, not just the ones teams picked, so the overview can show
+    // a track nobody has chosen yet.
+    db
+      .select({ id: tracks.id, name: tracks.name, isActive: tracks.isActive })
+      .from(tracks)
+      .orderBy(tracks.name),
+    // A deck Drive reports as modified after this was edited past the deadline.
+    db
+      .select({ submissionDeadline: eventConfig.submissionDeadline })
+      .from(eventConfig)
+      .limit(1),
+  ]);
 
   return {
     admin: { id: admin.id, name: admin.name, role: admin.role },
@@ -1122,5 +1094,7 @@ export async function getAdminReviewData() {
     submissions: submissionRows,
     members: memberRows,
     scores: scoreRows,
+    tracks: trackRows,
+    submissionDeadline: config?.submissionDeadline ?? null,
   };
 }

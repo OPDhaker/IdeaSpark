@@ -1,7 +1,6 @@
 "use client";
 
 import { Eye, EyeOff, Loader2 } from "lucide-react";
-import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { setLeaderboardPublished } from "@/app/actions";
 import { Button } from "@/components/ui/button";
@@ -12,7 +11,6 @@ import { Button } from "@/components/ui/button";
  * inferred.
  */
 export function LeaderboardToggle({ published }: { published: boolean }) {
-  const router = useRouter();
   const [pending, setPending] = useState(false);
   const [error, setError] = useState("");
 
@@ -21,7 +19,6 @@ export function LeaderboardToggle({ published }: { published: boolean }) {
     setError("");
     try {
       await setLeaderboardPublished(!published);
-      router.refresh();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Could not save.");
     } finally {

@@ -4,6 +4,7 @@ import {
   SidebarProvider,
   SidebarTrigger,
 } from "@/components/ui/sidebar";
+import { Toaster } from "@/components/ui/sonner";
 import { getAdminActor } from "@/lib/roles";
 import { AdminSidebar } from "./_components/admin-sidebar";
 
@@ -37,6 +38,7 @@ export default async function AdminLayout({ children }: LayoutProps<"/admin">) {
         </div>
         {children}
       </SidebarInset>
+      <Toaster position="top-center" richColors />
     </SidebarProvider>
   );
 }

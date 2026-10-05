@@ -1,8 +1,23 @@
 "use client";
 
-import { useRouter } from "next/navigation";
+import Link from "next/link";
 import { useMemo, useState } from "react";
-import { reviewSubmission, scanAttendance, setTeamStatus } from "@/app/actions";
+import { recheckDriveLinks } from "@/actions/submissions";
+import { reviewSubmission, setTeamStatus } from "@/app/actions";
+import { Badge } from "@/components/ui/badge";
+import { formatDate } from "../_lib/format";
+import {
+  DEFAULT_FILTERS,
+  type TeamFilters as Filters,
+  filterTeams,
+  sortTeams,
+  summarize,
+  type TeamSort,
+} from "../_lib/team-filters";
+import { AdminOverview } from "./admin-overview";
+import { DriveLinkStatus } from "./drive-link-status";
+import { TeamFilters } from "./team-filters";
+import { TeamOverride } from "./team-override";
 
 type ReviewData = {
   admin: {
@@ -18,7 +33,9 @@ type ReviewData = {
     status: "pending_submission" | "in_review" | "rejected" | "accepted";
     paymentStatus: "unpaid" | "paid";
     paymentId: string | null;
+    createdAt: Date;
   }>;
+  tracks: Array<{ id: string; name: string; isActive: boolean }>;
   rounds: Array<{
     id: string;
     name: string;
@@ -33,6 +50,10 @@ type ReviewData = {
     title: string | null;
     description: string | null;
     driveLink: string | null;
+    driveLinkStatus: "public" | "restricted" | "unverified" | null;
+    driveLinkName: string | null;
+    driveLinkModifiedAt: Date | null;
+    driveLinkCheckedAt: Date | null;
     status: "pending_submission" | "in_review" | "rejected" | "accepted";
     remarks: string | null;
     submittedAt: Date | null;
@@ -53,25 +74,24 @@ type ReviewData = {
     score: string | null;
     remarks: string | null;
   }>;
+  submissionDeadline: Date | null;
 };
 
-type ScanResult = {
-  memberName: string;
-  teamName: string;
-  alreadyPresent: boolean;
-  paymentVerified: boolean;
-};
+const statusVariant = {
+  pending_submission: "outline",
+  in_review: "secondary",
+  accepted: "default",
+  rejected: "destructive",
+} as const;
 
 export function AdminDashboard({ data }: { data: ReviewData }) {
-  const router = useRouter();
   const [selectedTeamId, setSelectedTeamId] = useState(data.teams[0]?.id ?? "");
   const [selectedRoundId, setSelectedRoundId] = useState(
     data.rounds.find((round) => round.isActive)?.id ?? data.rounds[0]?.id ?? "",
   );
-  const [query, setQuery] = useState("");
+  const [filters, setFilters] = useState<Filters>(DEFAULT_FILTERS);
+  const [sort, setSort] = useState<TeamSort>("newest");
   const [remarks, setRemarks] = useState("");
-  const [attendanceCode, setAttendanceCode] = useState("");
-  const [scanResult, setScanResult] = useState<ScanResult | null>(null);
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
   const [pending, setPending] = useState(false);
@@ -82,18 +102,48 @@ export function AdminDashboard({ data }: { data: ReviewData }) {
       submission.teamId === selectedTeamId &&
       submission.roundId === selectedRoundId,
   );
+  // Teams whose deck for the selected round is known to be private, so the
+  // list can flag them without opening each one.
+  const privateLinkTeams = useMemo(
+    () =>
+      new Set(
+        data.submissions
+          .filter(
+            (submission) =>
+              submission.roundId === selectedRoundId &&
+              submission.driveLinkStatus === "restricted",
+          )
+          .map((submission) => submission.teamId),
+      ),
+    [data.submissions, selectedRoundId],
+  );
+  const activeRound = data.rounds.find((round) => round.isActive) ?? null;
+  const activeSubmission = data.submissions.find(
+    (submission) =>
+      submission.teamId === selectedTeamId &&
+      submission.roundId === activeRound?.id,
+  );
   const selectedMembers = data.members.filter(
     (member) => member.teamId === selectedTeamId,
   );
   const visibleTeams = useMemo(
-    () =>
-      data.teams.filter((team) =>
-        `${team.teamName} ${team.trackName ?? ""}`
-          .toLowerCase()
-          .includes(query.toLowerCase()),
-      ),
-    [data.teams, query],
+    () => sortTeams(filterTeams(data.teams, filters), sort),
+    [data.teams, filters, sort],
   );
+  const summary = useMemo(
+    () => summarize(data.teams, data.tracks),
+    [data.teams, data.tracks],
+  );
+
+  // An overview card names one slice outright, so it replaces the other
+  // filters rather than stacking on them. The search box is left alone.
+  function applySlice(slice: Partial<Filters>) {
+    setFilters((current) => ({
+      ...DEFAULT_FILTERS,
+      ...slice,
+      query: current.query,
+    }));
+  }
 
   function clearFeedback() {
     setNotice("");
@@ -109,9 +159,29 @@ export function AdminDashboard({ data }: { data: ReviewData }) {
     try {
       await operation();
       setNotice(successMessage);
-      router.refresh();
+      return true;
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Action failed.");
+      return false;
+    } finally {
+      setPending(false);
+    }
+  }
+
+  async function handleRecheck() {
+    clearFeedback();
+    setPending(true);
+    try {
+      const counts = await recheckDriveLinks(selectedRoundId);
+      const parts = [
+        `${counts.public} public`,
+        `${counts.restricted} private`,
+        counts.unverified && `${counts.unverified} unreachable`,
+        counts.invalid && `${counts.invalid} not a deck link`,
+      ].filter(Boolean);
+      setNotice(`Links rechecked: ${parts.join(", ")}.`);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Recheck failed.");
     } finally {
       setPending(false);
     }
@@ -127,41 +197,17 @@ export function AdminDashboard({ data }: { data: ReviewData }) {
 
   // Teams and submissions share one lifecycle enum, so a team is `accepted`,
   // never `approved`. See `reviewStatusEnum` in src/db/schema.ts.
-  function handleTeamStatus(
+  async function handleOverride(
     status: "accepted" | "rejected" | "pending_submission",
+    reason: string,
   ) {
-    if (!selectedTeam) return;
+    if (!selectedTeam) return false;
     return run(
-      () => setTeamStatus(selectedTeam.id, status),
-      `Team ${status.replaceAll("_", " ")}.`,
+      () => setTeamStatus(selectedTeam.id, status, reason),
+      status === "pending_submission"
+        ? "Team reopened for resubmission."
+        : `Team force ${status}.`,
     );
-  }
-
-  // Not routed through `run()`: the desk needs the scan's result on screen, and
-  // `run()` throws it away.
-  async function handleAttendance() {
-    clearFeedback();
-    setScanResult(null);
-    if (!attendanceCode.trim()) {
-      setError("Enter an attendance code.");
-      return;
-    }
-    setPending(true);
-    try {
-      const result = await scanAttendance(attendanceCode);
-      setScanResult({
-        memberName: result.member.name,
-        teamName: result.team.teamName,
-        alreadyPresent: result.alreadyPresent,
-        paymentVerified: result.paymentVerified,
-      });
-      setAttendanceCode("");
-      router.refresh();
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Action failed.");
-    } finally {
-      setPending(false);
-    }
   }
 
   const canReview = data.admin.role === "super_admin";
@@ -193,8 +239,18 @@ export function AdminDashboard({ data }: { data: ReviewData }) {
           </div>
         )}
 
-        <div className="mt-6 grid gap-6 lg:grid-cols-[280px_1fr]">
-          <aside className="border border-[#17201d]/15 bg-white p-4">
+        <AdminOverview
+          counts={summary.counts}
+          trackRows={summary.trackRows}
+          filters={filters}
+          onApply={applySlice}
+        />
+
+        <div className="mt-6 grid gap-6 lg:grid-cols-[300px_1fr]">
+          {/* Only the team list scrolls. The aside is pinned to the viewport on
+              desktop (`self-start`, since a stretched grid item can't stick),
+              so the team pane beside it rides the page scroll. */}
+          <aside className="flex flex-col border border-[#17201d]/15 bg-white p-4 lg:sticky lg:top-6 lg:max-h-[calc(100dvh-3rem)] lg:self-start">
             <div className="flex items-center justify-between">
               <h2 className="font-semibold">Teams</h2>
               <span className="text-xs text-[#17201d]/50">
@@ -202,12 +258,23 @@ export function AdminDashboard({ data }: { data: ReviewData }) {
               </span>
             </div>
             <input
-              value={query}
-              onChange={(event) => setQuery(event.target.value)}
+              value={filters.query}
+              onChange={(event) =>
+                setFilters({ ...filters, query: event.target.value })
+              }
               placeholder="Search teams"
               className="mt-4 w-full border border-[#17201d]/20 px-3 py-2 text-sm outline-none focus:border-[#55705c]"
             />
-            <div className="mt-4 space-y-1">
+            <TeamFilters
+              filters={filters}
+              sort={sort}
+              tracks={data.tracks}
+              shown={visibleTeams.length}
+              total={data.teams.length}
+              onChange={setFilters}
+              onSort={setSort}
+            />
+            <div className="mt-4 max-h-[60dvh] min-h-0 flex-1 space-y-1 overflow-y-auto overscroll-contain lg:max-h-none">
               {visibleTeams.map((team) => (
                 <button
                   key={team.id}
@@ -217,8 +284,22 @@ export function AdminDashboard({ data }: { data: ReviewData }) {
                 >
                   <span className="block font-medium">{team.teamName}</span>
                   <span className="mt-1 block text-xs text-[#17201d]/55">
-                    {team.trackName ?? "No track"} ·{" "}
-                    {team.status.replaceAll("_", " ")}
+                    {team.trackName ?? "No track"}
+                  </span>
+                  <span className="mt-1.5 flex flex-wrap gap-1">
+                    <Badge variant={statusVariant[team.status]}>
+                      {team.status.replaceAll("_", " ")}
+                    </Badge>
+                    <Badge
+                      variant={
+                        team.paymentStatus === "paid" ? "default" : "outline"
+                      }
+                    >
+                      {team.paymentStatus}
+                    </Badge>
+                    {privateLinkTeams.has(team.id) && (
+                      <Badge variant="destructive">private link</Badge>
+                    )}
                   </span>
                 </button>
               ))}
@@ -255,26 +336,6 @@ export function AdminDashboard({ data }: { data: ReviewData }) {
                       </p>
                     ) : null}
                   </div>
-                  {canReview && (
-                    <div className="flex flex-wrap gap-2">
-                      <button
-                        type="button"
-                        disabled={pending}
-                        onClick={() => handleTeamStatus("accepted")}
-                        className="border border-[#55705c] px-3 py-2 text-sm text-[#315c38] disabled:opacity-50"
-                      >
-                        Approve team
-                      </button>
-                      <button
-                        type="button"
-                        disabled={pending}
-                        onClick={() => handleTeamStatus("rejected")}
-                        className="border border-[#a24b3d] px-3 py-2 text-sm text-[#8a352a] disabled:opacity-50"
-                      >
-                        Reject team
-                      </button>
-                    </div>
-                  )}
                 </div>
 
                 <div className="mt-6 grid gap-6 xl:grid-cols-[1.2fr_0.8fr]">
@@ -289,19 +350,32 @@ export function AdminDashboard({ data }: { data: ReviewData }) {
                             Review the selected round&apos;s idea.
                           </p>
                         </div>
-                        <select
-                          value={selectedRoundId}
-                          onChange={(event) =>
-                            setSelectedRoundId(event.target.value)
-                          }
-                          className="border border-[#17201d]/20 bg-white px-3 py-2 text-sm"
-                        >
-                          {data.rounds.map((round) => (
-                            <option key={round.id} value={round.id}>
-                              Round {round.sequenceNo}: {round.name}
-                            </option>
-                          ))}
-                        </select>
+                        <div className="flex flex-wrap gap-2">
+                          <select
+                            value={selectedRoundId}
+                            onChange={(event) =>
+                              setSelectedRoundId(event.target.value)
+                            }
+                            className="border border-[#17201d]/20 bg-white px-3 py-2 text-sm"
+                          >
+                            {data.rounds.map((round) => (
+                              <option key={round.id} value={round.id}>
+                                Round {round.sequenceNo}: {round.name}
+                              </option>
+                            ))}
+                          </select>
+                          {canReview && selectedRoundId && (
+                            <button
+                              type="button"
+                              disabled={pending}
+                              onClick={handleRecheck}
+                              title="Check every deck link in this round is still public"
+                              className="border border-[#17201d]/20 px-3 py-2 text-sm disabled:opacity-50"
+                            >
+                              Recheck links
+                            </button>
+                          )}
+                        </div>
                       </div>
                       {selectedSubmission ? (
                         <div className="mt-5">
@@ -311,10 +385,7 @@ export function AdminDashboard({ data }: { data: ReviewData }) {
                             </span>
                             {selectedSubmission.submittedAt && (
                               <span>
-                                ·{" "}
-                                {new Date(
-                                  selectedSubmission.submittedAt,
-                                ).toLocaleDateString()}
+                                · {formatDate(selectedSubmission.submittedAt)}
                               </span>
                             )}
                           </div>
@@ -326,14 +397,27 @@ export function AdminDashboard({ data }: { data: ReviewData }) {
                               "No description provided."}
                           </p>
                           {selectedSubmission.driveLink && (
-                            <a
-                              href={selectedSubmission.driveLink}
-                              target="_blank"
-                              rel="noreferrer"
-                              className="mt-4 inline-block text-sm font-medium text-[#55705c] underline"
-                            >
-                              Open submission link
-                            </a>
+                            <div className="mt-4">
+                              <a
+                                href={selectedSubmission.driveLink}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="inline-block text-sm font-medium text-[#55705c] underline"
+                              >
+                                Open submission link
+                              </a>
+                              <DriveLinkStatus
+                                status={selectedSubmission.driveLinkStatus}
+                                name={selectedSubmission.driveLinkName}
+                                modifiedAt={
+                                  selectedSubmission.driveLinkModifiedAt
+                                }
+                                checkedAt={
+                                  selectedSubmission.driveLinkCheckedAt
+                                }
+                                deadline={data.submissionDeadline}
+                              />
+                            </div>
                           )}
                           {canReview && (
                             <div className="mt-5 border-t border-[#17201d]/10 pt-4">
@@ -372,6 +456,20 @@ export function AdminDashboard({ data }: { data: ReviewData }) {
                           No submission for this round.
                         </p>
                       )}
+                      {canReview && (
+                        <TeamOverride
+                          key={selectedTeam.id}
+                          team={selectedTeam}
+                          roundName={activeRound?.name ?? null}
+                          hasSubmission={
+                            !!activeSubmission &&
+                            activeSubmission.status !== "pending_submission"
+                          }
+                          submissionDeadline={data.submissionDeadline}
+                          pending={pending}
+                          onConfirm={handleOverride}
+                        />
+                      )}
                     </section>
 
                     <section className="border border-[#17201d]/15 bg-white p-5">
@@ -404,47 +502,14 @@ export function AdminDashboard({ data }: { data: ReviewData }) {
                       <section className="border border-[#17201d]/15 bg-white p-5">
                         <h3 className="text-lg font-semibold">Attendance</h3>
                         <p className="mt-1 text-sm text-[#17201d]/55">
-                          Scan a member code at the event desk.
+                          Scan a team pass at the event desk.
                         </p>
-                        <input
-                          value={attendanceCode}
-                          onChange={(event) =>
-                            setAttendanceCode(event.target.value)
-                          }
-                          onKeyDown={(event) => {
-                            if (event.key === "Enter") void handleAttendance();
-                          }}
-                          placeholder="Attendance code"
-                          className="mt-5 w-full border border-[#17201d]/20 px-3 py-2 text-sm"
-                        />
-                        <button
-                          type="button"
-                          disabled={pending}
-                          onClick={() => void handleAttendance()}
-                          className="mt-3 w-full border border-[#17201d] px-4 py-3 text-sm disabled:opacity-50"
+                        <Link
+                          href="/admin/attendance"
+                          className="mt-5 block w-full border border-[#17201d] px-4 py-3 text-center text-sm"
                         >
-                          Mark attendance
-                        </button>
-                        {scanResult && (
-                          <div className="mt-4 border-t border-[#17201d]/10 pt-4 text-sm">
-                            <p className="font-medium">
-                              {scanResult.memberName}
-                            </p>
-                            <p className="mt-1 text-[#17201d]/55">
-                              {scanResult.teamName} ·{" "}
-                              {scanResult.alreadyPresent
-                                ? "already marked present"
-                                : "attendance recorded"}
-                            </p>
-                            <p
-                              className={`mt-3 border px-3 py-2 font-medium ${scanResult.paymentVerified ? "border-[#73917a] bg-[#eaf2e9] text-[#315c38]" : "border-[#a24b3d] bg-[#fff1ed] text-[#8a352a]"}`}
-                            >
-                              {scanResult.paymentVerified
-                                ? "Payment verified"
-                                : "Please manually verify"}
-                            </p>
-                          </div>
-                        )}
+                          Open scanner
+                        </Link>
                       </section>
                     )}
                   </div>

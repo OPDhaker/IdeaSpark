@@ -1,4 +1,5 @@
 import { getEventControls } from "@/app/actions";
+import { AttendanceToggle } from "./attendance-toggle";
 import { LeaderboardToggle } from "./leaderboard-toggle";
 
 export const dynamic = "force-dynamic";
@@ -20,12 +21,19 @@ export default async function AdminEventPage() {
             Event controls
           </h1>
           <p className="mt-3 text-muted-foreground text-sm">
-            What teams can see, and when.
+            When the doors open, and what teams can see.
           </p>
         </header>
 
         {config ? (
-          <LeaderboardToggle published={config.leaderboardPublished} />
+          <>
+            <AttendanceToggle
+              attendanceDay={config.attendanceDay}
+              dayOne={config.dayOne}
+              dayTwo={config.dayTwo}
+            />
+            <LeaderboardToggle published={config.leaderboardPublished} />
+          </>
         ) : (
           <p className="text-muted-foreground text-sm">
             Event configuration is not initialized. Run <code>db:seed</code>{" "}

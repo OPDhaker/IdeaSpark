@@ -385,11 +385,51 @@ export async function listAdminTeams(filters?: {
     .orderBy(desc(teams.createdAt));
 }
 
-export async function findMemberByAttendanceCode(attendanceCode: string) {
-  const [member] = await db
-    .select()
-    .from(members)
-    .where(eq(members.attendanceCode, attendanceCode))
+export async function findTeamByAttendanceCode(attendanceCode: string) {
+  const [team] = await db
+    .select({
+      id: teams.id,
+      teamName: teams.teamName,
+      paymentStatus: teams.paymentStatus,
+      paymentId: teams.paymentId,
+      trackName: tracks.name,
+    })
+    .from(teams)
+    .leftJoin(tracks, eq(teams.trackId, tracks.id))
+    .where(eq(teams.attendanceCode, attendanceCode))
     .limit(1);
-  return member ?? null;
+  return team ?? null;
+}
+
+/**
+ * Every member of a team with their attendance for one event day, leader
+ * first. `scannedByName` is null both when nobody has marked the member and
+ * when the volunteer who did has since been removed from `admins`.
+ */
+export async function getTeamAttendanceRoster(
+  teamId: string,
+  eventDate: string,
+) {
+  const rows = await db
+    .select({
+      id: members.id,
+      name: members.name,
+      raNumber: members.raNumber,
+      isLeader: members.isLeader,
+      scannedAt: attendance.scannedAt,
+      scannedByName: admins.name,
+    })
+    .from(members)
+    .leftJoin(
+      attendance,
+      and(
+        eq(attendance.memberId, members.id),
+        eq(attendance.eventDate, eventDate),
+      ),
+    )
+    .leftJoin(admins, eq(attendance.scannedBy, admins.id))
+    .where(eq(members.teamId, teamId))
+    .orderBy(desc(members.isLeader), asc(members.name));
+
+  return rows.map((row) => ({ ...row, present: row.scannedAt !== null }));
 }

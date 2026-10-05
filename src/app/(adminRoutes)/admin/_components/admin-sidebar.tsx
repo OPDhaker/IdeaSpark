@@ -2,8 +2,10 @@
 
 import {
   ClipboardList,
+  Download,
   LayoutDashboard,
   LogOut,
+  ScanLine,
   Settings2,
   Users,
 } from "lucide-react";
@@ -33,6 +35,12 @@ const NAV = [
     roles: ["super_admin", "evaluator", "volunteer"],
   },
   {
+    href: "/admin/attendance",
+    label: "Mark attendance",
+    icon: ScanLine,
+    roles: ["super_admin", "volunteer"],
+  },
+  {
     href: "/admin/panels",
     label: "Judging panels",
     icon: Users,
@@ -42,6 +50,12 @@ const NAV = [
     href: "/admin/event",
     label: "Event controls",
     icon: Settings2,
+    roles: ["super_admin"],
+  },
+  {
+    href: "/admin/export",
+    label: "Export teams",
+    icon: Download,
     roles: ["super_admin"],
   },
 ] satisfies Array<{

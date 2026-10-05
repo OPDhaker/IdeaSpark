@@ -106,7 +106,7 @@ export async function upsertScore(input: ScoreInput) {
     remarks: input.remarks,
   });
 
-  await log(admin.id, "score.upsert", "team", input.teamId, {
+  log(admin.id, "score.upsert", "team", input.teamId, {
     roundId: input.roundId,
     ...criteria,
   });
@@ -275,7 +275,7 @@ export async function createPanel(name: string) {
   if (!trimmed) throw new Error("Panel name is required");
 
   const [row] = await db.insert(panels).values({ name: trimmed }).returning();
-  await log(admin.id, "panel.create", "panel", row.id, { name: trimmed });
+  log(admin.id, "panel.create", "panel", row.id, { name: trimmed });
   revalidatePath("/admin/panels");
   return row;
 }
@@ -292,7 +292,7 @@ export async function renamePanel(panelId: string, name: string) {
     .returning();
   if (!row) throw new Error("Panel not found");
 
-  await log(admin.id, "panel.rename", "panel", panelId, { name: trimmed });
+  log(admin.id, "panel.rename", "panel", panelId, { name: trimmed });
   revalidatePath("/admin/panels");
   return row;
 }
@@ -305,7 +305,7 @@ export async function renamePanel(panelId: string, name: string) {
 export async function deletePanel(panelId: string) {
   const admin = await requireAdminRole(["super_admin"]);
   await db.delete(panels).where(eq(panels.id, panelId));
-  await log(admin.id, "panel.delete", "panel", panelId);
+  log(admin.id, "panel.delete", "panel", panelId);
   revalidatePath("/admin/panels");
   revalidatePath("/panel", "layout");
 }
@@ -313,7 +313,7 @@ export async function deletePanel(panelId: string) {
 export async function setPanelJudges(panelId: string, adminIds: string[]) {
   const admin = await requireAdminRole(["super_admin"]);
   const rows = await setPanelJudgesAtomically({ panelId, adminIds });
-  await log(admin.id, "panel.judges.set", "panel", panelId, { adminIds });
+  log(admin.id, "panel.judges.set", "panel", panelId, { adminIds });
   revalidatePath("/admin/panels");
   revalidatePath("/panel", "layout");
   return rows;
@@ -331,7 +331,7 @@ export async function assignTeamsToPanel(
     panelId,
     adminId: admin.id,
   });
-  await log(admin.id, "panel.assign", "panel", panelId, { roundId, teamIds });
+  log(admin.id, "panel.assign", "panel", panelId, { roundId, teamIds });
   revalidatePath("/admin/panels");
   revalidatePath("/panel", "layout");
   return rows;
