@@ -16,13 +16,17 @@ import {
   type ExportColumn,
 } from "@/app/(adminRoutes)/admin/export/_lib/columns";
 import { db } from "@/db";
-import { getEventConfig } from "@/db/queries";
+import { getEventConfig, getPanelsWithJudges } from "@/db/queries";
 import {
   attendance,
   departments,
   evaluationRounds,
   members,
+  PANEL_TYPE_KEYS,
+  PANEL_TYPES,
+  type PanelType,
   submissions,
+  teamPanelAssignments,
   teams,
   tracks,
 } from "@/db/schema";
@@ -243,5 +247,128 @@ export async function exportOdListCsv(day: "day_one" | "day_two") {
     filename: `ideaspark-od-list-day-${dayNumber}-${date}.csv`,
     csv,
     rowCount: rows.length,
+  };
+}
+
+const roundIdSchema = z.string().uuid();
+
+/**
+ * Who judges whom in one round: one row per team per panel, grouped by panel,
+ * each row carrying the tracks its panel covers and the panel's judges. An
+ * accepted, paid team still missing a panel of some type gets an `Unassigned`
+ * row for that type, so the gaps are on the sheet rather than discovered in
+ * the room.
+ */
+export async function exportPanelAssignmentsCsv(roundId: string) {
+  const admin = await requireAdminRole(["super_admin"]);
+  const parsed = roundIdSchema.safeParse(roundId);
+  if (!parsed.success) throw new Error("Invalid round");
+
+  const [[round], { panels, judges }, assigned, eligible] = await Promise.all([
+    db
+      .select({ id: evaluationRounds.id, slug: evaluationRounds.slug })
+      .from(evaluationRounds)
+      .where(eq(evaluationRounds.id, parsed.data))
+      .limit(1),
+    getPanelsWithJudges(),
+    db
+      .select({
+        panelId: teamPanelAssignments.panelId,
+        panelType: teamPanelAssignments.panelType,
+        teamId: teams.id,
+        teamName: teams.teamName,
+        trackName: tracks.name,
+      })
+      .from(teamPanelAssignments)
+      .innerJoin(teams, eq(teamPanelAssignments.teamId, teams.id))
+      .leftJoin(tracks, eq(teams.trackId, tracks.id))
+      .where(eq(teamPanelAssignments.roundId, parsed.data)),
+    db
+      .select({
+        teamId: teams.id,
+        teamName: teams.teamName,
+        trackName: tracks.name,
+      })
+      .from(teams)
+      .leftJoin(tracks, eq(teams.trackId, tracks.id))
+      .where(
+        and(eq(teams.status, "accepted"), eq(teams.paymentStatus, "paid")),
+      ),
+  ]);
+  if (!round) throw new Error("Evaluation round not found");
+
+  const panelById = new Map(panels.map((panel) => [panel.id, panel]));
+  const tracksOf = new Map<string, Set<string>>();
+  for (const row of assigned) {
+    const set = tracksOf.get(row.panelId) ?? new Set<string>();
+    if (row.trackName) set.add(row.trackName);
+    tracksOf.set(row.panelId, set);
+  }
+  const judgesOf = (panelId: string) =>
+    judges
+      .filter((judge) => judge.panelId === panelId)
+      .map((judge) => judge.name)
+      .join("; ");
+
+  const typeOrder = (type: PanelType) => PANEL_TYPE_KEYS.indexOf(type);
+  const byText = (a: string | null, b: string | null) =>
+    (a ?? "").localeCompare(b ?? "");
+
+  const rows = assigned
+    .map((row) => ({
+      ...row,
+      panelName: panelById.get(row.panelId)?.name ?? "",
+    }))
+    .sort(
+      (a, b) =>
+        typeOrder(a.panelType) - typeOrder(b.panelType) ||
+        byText(a.panelName, b.panelName) ||
+        byText(a.trackName, b.trackName) ||
+        byText(a.teamName, b.teamName),
+    )
+    .map((row) => [
+      row.panelName,
+      PANEL_TYPES[row.panelType].label,
+      [...(tracksOf.get(row.panelId) ?? [])].sort().join("; "),
+      row.teamName,
+      row.trackName,
+      judgesOf(row.panelId),
+    ]);
+
+  const slots = new Set(
+    assigned.map((row) => `${row.teamId}:${row.panelType}`),
+  );
+  const unassigned = PANEL_TYPE_KEYS.flatMap((type) =>
+    eligible
+      .filter((team) => !slots.has(`${team.teamId}:${type}`))
+      .sort(
+        (a, b) =>
+          byText(a.trackName, b.trackName) || byText(a.teamName, b.teamName),
+      )
+      .map((team) => [
+        "Unassigned",
+        PANEL_TYPES[type].label,
+        null,
+        team.teamName,
+        team.trackName,
+        null,
+      ]),
+  );
+
+  const csv = toCsv(
+    ["Panel", "Panel type", "Panel tracks", "Team", "Team track", "Judges"],
+    [...rows, ...unassigned],
+  );
+
+  log(admin.id, "panels.export", "evaluation_round", round.id, {
+    assigned: rows.length,
+    unassigned: unassigned.length,
+  });
+
+  return {
+    filename: `ideaspark-panels-${round.slug}-${today.format(new Date())}.csv`,
+    csv,
+    rowCount: rows.length,
+    unassignedCount: unassigned.length,
   };
 }
