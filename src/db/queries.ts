@@ -7,6 +7,7 @@ import {
   evaluationRounds,
   eventConfig,
   members,
+  type PanelType,
   panelMembers,
   panels,
   scores,
@@ -76,81 +77,168 @@ export async function getAttendanceForTeam(teamId: string) {
     .orderBy(members.name, attendance.eventDate);
 }
 
-/**
- * A team's score is its panel's *per-criterion* mean, summed — not the mean of
- * the judges' totals. With all four criteria required the two are the same
- * number; averaging per criterion is what lets a caller show the breakdown
- * behind the total.
+/*
+ * Scoring math, shared by both boards.
  *
- * Out of 50. The inner join on `scores` keeps an unscored team off the board
- * entirely rather than ranking it last, so an empty board is the normal state
- * until judging starts.
+ * A team's day is two panel means: Panel Type 1's four criteria, each averaged
+ * across that panel's judges and then summed (/90), plus Panel Type 2's Risk
+ * Management mean (/10) — /100 a day. `avg()` skips NULLs, and a row only
+ * fills its own type's columns, so each criterion is averaged over exactly the
+ * judges who score it. A type nobody has scored yet averages to NULL, which is
+ * how "incomplete" is told apart from "scored zero".
+ *
+ * The inner join on `scores` keeps an unscored team off the board entirely
+ * rather than ranking it last, so an empty board is the normal state until
+ * judging starts.
  */
-const panelMean = {
-  problemUnderstanding: sql<string>`coalesce(avg(${scores.problemUnderstanding}), 0)`,
-  ideaFeasibility: sql<string>`coalesce(avg(${scores.ideaFeasibility}), 0)`,
-  decisionMaking: sql<string>`coalesce(avg(${scores.decisionMaking}), 0)`,
-  coordination: sql<string>`coalesce(avg(${scores.coordination}), 0)`,
+
+type RawDayRow = {
+  team_id: string;
+  team_name: string;
+  track_name: string | null;
+  main_judges: number;
+  risk_judges: number;
+  problem_understanding: string | null;
+  idea_feasibility: string | null;
+  decision_making: string | null;
+  coordination: string | null;
+  risk_management: string | null;
+  main_total: string | null;
+  risk_total: string | null;
+  day_total: string;
+  complete: boolean;
 };
 
-const panelTotal = sql<string>`
-  coalesce(avg(${scores.problemUnderstanding}), 0)
-  + coalesce(avg(${scores.ideaFeasibility}), 0)
-  + coalesce(avg(${scores.decisionMaking}), 0)
-  + coalesce(avg(${scores.coordination}), 0)
-`;
+/**
+ * One round (one event day) for the judging panel. No publish gate: judges
+ * need it live, during the round it describes. A team one panel type has
+ * scored and the other has not is still listed, flagged `complete: false` and
+ * sorted after the complete ones, so judges can see who is still waiting.
+ */
+export async function getPanelLeaderboardRows(roundId: string) {
+  const { rows } = await db.execute<RawDayRow>(sql`
+    WITH day AS (
+      SELECT
+        s.team_id,
+        count(*) FILTER (WHERE s.panel_type = 'main')::int AS main_judges,
+        count(*) FILTER (WHERE s.panel_type = 'risk')::int AS risk_judges,
+        avg(s.problem_understanding) AS problem_understanding,
+        avg(s.idea_feasibility) AS idea_feasibility,
+        avg(s.decision_making) AS decision_making,
+        avg(s.coordination) AS coordination,
+        avg(s.risk_management) AS risk_management
+      FROM ${scores} s
+      WHERE s.round_id = ${roundId}
+      GROUP BY s.team_id
+    )
+    SELECT
+      t.id AS team_id,
+      t.team_name,
+      tr.name AS track_name,
+      d.main_judges,
+      d.risk_judges,
+      d.problem_understanding,
+      d.idea_feasibility,
+      d.decision_making,
+      d.coordination,
+      d.risk_management,
+      d.problem_understanding + d.idea_feasibility + d.decision_making
+        + d.coordination AS main_total,
+      d.risk_management AS risk_total,
+      coalesce(
+        d.problem_understanding + d.idea_feasibility + d.decision_making
+          + d.coordination,
+        0
+      ) + coalesce(d.risk_management, 0) AS day_total,
+      (d.main_judges > 0 AND d.risk_judges > 0) AS complete
+    FROM day d
+    JOIN ${teams} t ON t.id = d.team_id
+    LEFT JOIN ${tracks} tr ON tr.id = t.track_id
+    WHERE t.status = 'accepted' AND t.payment_status = 'paid'
+    ORDER BY complete DESC, day_total DESC, t.team_name ASC
+  `);
 
-export async function getLeaderboard() {
-  return db
-    .select({
-      teamId: teams.id,
-      teamName: teams.teamName,
-      trackName: tracks.name,
-      judgeCount: sql<number>`count(distinct ${scores.evaluatorId})::int`,
-      ...panelMean,
-      averageScore: panelTotal,
-    })
-    .from(scores)
-    .innerJoin(teams, eq(scores.teamId, teams.id))
-    .leftJoin(tracks, eq(teams.trackId, tracks.id))
-    .where(and(eq(teams.paymentStatus, "paid"), eq(teams.status, "accepted")))
-    .groupBy(teams.id, teams.teamName, tracks.name)
-    .orderBy(desc(panelTotal));
+  return rows.map((row) => ({
+    teamId: row.team_id,
+    teamName: row.team_name,
+    trackName: row.track_name,
+    mainJudges: row.main_judges,
+    riskJudges: row.risk_judges,
+    problemUnderstanding: row.problem_understanding,
+    ideaFeasibility: row.idea_feasibility,
+    decisionMaking: row.decision_making,
+    coordination: row.coordination,
+    riskManagement: row.risk_management,
+    mainTotal: row.main_total,
+    riskTotal: row.risk_total,
+    dayTotal: row.day_total,
+    complete: row.complete,
+  }));
 }
 
 /**
- * The same board scoped to one round, for the judging panel. No day-one gate:
- * judges need it live, during the round it describes.
+ * The team leaderboard: every day a team was scored on, each /100, summed and
+ * divided by the number of rounds, so the final is /100 and a day not played
+ * counts as zero — a team judged only on Day 1 tops out at 50, and every Day 2
+ * finalist ranks above it. The divisor is the round count rather than a
+ * literal 2 so it cannot disagree with `evaluation_rounds`.
+ *
+ * A team with any incomplete day (one panel type in, the other not) is left
+ * off entirely: its total would be a number nobody can stand behind.
  */
-export async function getPanelLeaderboardRows(roundId: string) {
-  return db
-    .select({
-      teamId: teams.id,
-      teamName: teams.teamName,
-      trackName: tracks.name,
-      judgeCount: sql<number>`count(distinct ${scores.evaluatorId})::int`,
-      ...panelMean,
-      averageScore: panelTotal,
-    })
-    .from(scores)
-    .innerJoin(teams, eq(scores.teamId, teams.id))
-    .leftJoin(tracks, eq(teams.trackId, tracks.id))
-    .where(
-      and(
-        eq(scores.roundId, roundId),
-        eq(teams.paymentStatus, "paid"),
-        eq(teams.status, "accepted"),
-      ),
+export async function getLeaderboard() {
+  const { rows } = await db.execute<{
+    team_id: string;
+    team_name: string;
+    track_name: string | null;
+    days: Array<{ roundId: string; total: number }>;
+    total: string;
+  }>(sql`
+    WITH day AS (
+      SELECT
+        s.team_id,
+        s.round_id,
+        avg(s.problem_understanding) + avg(s.idea_feasibility)
+          + avg(s.decision_making) + avg(s.coordination) AS main_total,
+        avg(s.risk_management) AS risk_total
+      FROM ${scores} s
+      GROUP BY s.team_id, s.round_id
     )
-    .groupBy(teams.id, teams.teamName, tracks.name)
-    .orderBy(desc(panelTotal));
+    SELECT
+      t.id AS team_id,
+      t.team_name,
+      tr.name AS track_name,
+      json_agg(
+        json_build_object(
+          'roundId', d.round_id,
+          'total', d.main_total + d.risk_total
+        )
+      ) AS days,
+      sum(d.main_total + d.risk_total)
+        / (SELECT count(*) FROM ${evaluationRounds}) AS total
+    FROM day d
+    JOIN ${teams} t ON t.id = d.team_id
+    LEFT JOIN ${tracks} tr ON tr.id = t.track_id
+    WHERE t.status = 'accepted' AND t.payment_status = 'paid'
+    GROUP BY t.id, t.team_name, tr.name
+    HAVING bool_and(d.main_total IS NOT NULL AND d.risk_total IS NOT NULL)
+    ORDER BY total DESC, t.team_name ASC
+  `);
+
+  return rows.map((row) => ({
+    teamId: row.team_id,
+    teamName: row.team_name,
+    trackName: row.track_name,
+    days: row.days,
+    total: row.total,
+  }));
 }
 
 export async function getPanelForAdmin(
   adminId: string,
-): Promise<{ id: string; name: string } | null> {
+): Promise<{ id: string; name: string; type: PanelType } | null> {
   const [row] = await db
-    .select({ id: panels.id, name: panels.name })
+    .select({ id: panels.id, name: panels.name, type: panels.type })
     .from(panelMembers)
     .innerJoin(panels, eq(panelMembers.panelId, panels.id))
     .where(eq(panelMembers.adminId, adminId))
@@ -195,12 +283,17 @@ export async function listEvaluationRounds() {
  * requires the evaluator to sit on the team's own panel, which
  * `upsertPanelScoreAtomically` enforces.
  *
+ * `panelType` picks which of a team's two assignments is joined, so a team
+ * appears once. Scores are that type's only when scoped to a panel; the
+ * unscoped view returns both types, and each row says which it is.
+ *
  * Ordered by team name A-Z and never filtered by whether a judge has scored
  * yet, so prev/next stays put under someone's hand as they save.
  */
 export async function getPanelQueue(input: {
   roundId: string;
   panelId: string | null;
+  panelType: PanelType;
   eventDate: string;
 }) {
   const present = sql`EXISTS (
@@ -227,6 +320,7 @@ export async function getPanelQueue(input: {
       and(
         eq(teamPanelAssignments.teamId, teams.id),
         eq(teamPanelAssignments.roundId, input.roundId),
+        eq(teamPanelAssignments.panelType, input.panelType),
       ),
     )
     .leftJoin(panels, eq(teamPanelAssignments.panelId, panels.id))
@@ -247,17 +341,19 @@ export async function getPanelQueue(input: {
     return { teams: teamRows, scores: [] as PanelQueueScore[] };
 
   // Every judge's row, not only the caller's: peer scores are shown on the
-  // sheet. A team belongs to one panel per round, so these are that panel's
-  // judges without having to filter on the roster.
+  // sheet. A team has one panel of each type per round, so filtering on the
+  // type gives that panel's judges without having to filter on the roster.
   const scoreRows = await db
     .select({
       teamId: scores.teamId,
       evaluatorId: scores.evaluatorId,
       evaluatorName: admins.name,
+      panelType: scores.panelType,
       problemUnderstanding: scores.problemUnderstanding,
       ideaFeasibility: scores.ideaFeasibility,
       decisionMaking: scores.decisionMaking,
       coordination: scores.coordination,
+      riskManagement: scores.riskManagement,
       score: scores.score,
       remarks: scores.remarks,
     })
@@ -270,6 +366,7 @@ export async function getPanelQueue(input: {
           scores.teamId,
           teamRows.map((t) => t.id),
         ),
+        input.panelId ? eq(scores.panelType, input.panelType) : undefined,
       ),
     )
     .orderBy(asc(admins.name));
@@ -281,10 +378,12 @@ type PanelQueueScore = {
   teamId: string;
   evaluatorId: string;
   evaluatorName: string;
-  problemUnderstanding: string;
-  ideaFeasibility: string;
-  decisionMaking: string;
-  coordination: string;
+  panelType: PanelType;
+  problemUnderstanding: string | null;
+  ideaFeasibility: string | null;
+  decisionMaking: string | null;
+  coordination: string | null;
+  riskManagement: string | null;
   score: string | null;
   remarks: string | null;
 };
@@ -295,6 +394,7 @@ export async function getPanelCounts(roundId: string) {
     .select({
       id: panels.id,
       name: panels.name,
+      type: panels.type,
       teamCount: sql<number>`count(${teamPanelAssignments.teamId})::int`,
     })
     .from(panels)
@@ -305,16 +405,16 @@ export async function getPanelCounts(roundId: string) {
         eq(teamPanelAssignments.roundId, roundId),
       ),
     )
-    .groupBy(panels.id, panels.name)
-    .orderBy(asc(panels.name));
+    .groupBy(panels.id, panels.name, panels.type)
+    .orderBy(asc(panels.type), asc(panels.name));
 }
 
 /** Every panel with its judges and how many teams it holds in a round. */
 export async function getPanelsWithJudges() {
   const panelRows = await db
-    .select({ id: panels.id, name: panels.name })
+    .select({ id: panels.id, name: panels.name, type: panels.type })
     .from(panels)
-    .orderBy(asc(panels.name));
+    .orderBy(asc(panels.type), asc(panels.name));
 
   const judgeRows = await db
     .select({
@@ -336,6 +436,7 @@ export async function listAssignments(roundId: string) {
     .select({
       teamId: teamPanelAssignments.teamId,
       panelId: teamPanelAssignments.panelId,
+      panelType: teamPanelAssignments.panelType,
     })
     .from(teamPanelAssignments)
     .where(eq(teamPanelAssignments.roundId, roundId));

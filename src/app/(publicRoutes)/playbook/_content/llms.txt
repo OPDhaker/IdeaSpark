@@ -4,4 +4,4 @@
 
 ## Playbook
 
-- [Playbook](playbook.md): Dates, venue, tracks, the full two-day schedule, the Founder Simulation rules, the judging rubric out of 50, prizes, FAQ and contacts.
+- [Playbook](playbook.md): Dates, venue, tracks, the full two-day schedule, the Founder Simulation rules, the judging rubric out of 100, prizes, FAQ and contacts.

@@ -2,6 +2,7 @@
 
 import { Eye } from "lucide-react";
 import { useRouter } from "next/navigation";
+import { PANEL_TYPES, type PanelType } from "@/db/schema";
 import { cn } from "@/lib/utils";
 
 /**
@@ -18,7 +19,12 @@ export function PanelSwitcher({
   myPanelId,
 }: {
   slug: string;
-  options: Array<{ id: string; name: string; teamCount: number }>;
+  options: Array<{
+    id: string;
+    name: string;
+    type: PanelType;
+    teamCount: number;
+  }>;
   viewingPanelId: string | null;
   myPanelId: string | null;
 }) {
@@ -43,7 +49,7 @@ export function PanelSwitcher({
         <option value="all">All teams</option>
         {options.map((option) => (
           <option key={option.id} value={option.id}>
-            {option.name} ({option.teamCount})
+            {`${option.name} · ${PANEL_TYPES[option.type].label} (${option.teamCount})`}
             {option.id === myPanelId ? " · yours" : ""}
           </option>
         ))}

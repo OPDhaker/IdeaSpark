@@ -3,6 +3,7 @@ import Link from "next/link";
 import { getPanelRounds } from "@/actions/panel";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { PANEL_TYPES, panelMax } from "@/db/schema";
 
 export const dynamic = "force-dynamic";
 
@@ -42,6 +43,7 @@ export default async function PanelOverviewPage() {
             <h2 className="flex items-center gap-2 text-muted-foreground text-xs uppercase tracking-[0.12em]">
               <Users aria-hidden className="size-3.5" />
               {panel.name}
+              <Badge variant="outline">{PANEL_TYPES[panel.type].label}</Badge>
             </h2>
             <ul className="flex flex-wrap gap-2">
               {judges.map((judge) => (
@@ -56,9 +58,13 @@ export default async function PanelOverviewPage() {
               ))}
             </ul>
             <p className="text-muted-foreground text-sm">
-              Each of you scores every assigned team on your own screen. A
-              team&apos;s final number is this panel&apos;s average, per
-              criterion, out of 50.
+              Each of you scores every assigned team on your own screen, on{" "}
+              {PANEL_TYPES[panel.type].criteria
+                .map((criterion) => criterion.label)
+                .join(", ")}
+              . This panel&apos;s average, per criterion, is out of{" "}
+              {panelMax(panel.type)}; the team&apos;s other panel scores the
+              rest of the day&apos;s 100.
             </p>
           </section>
         ) : (
@@ -92,6 +98,9 @@ export default async function PanelOverviewPage() {
                 >
                   <p className="flex items-center gap-2 font-medium">
                     {item.name}
+                    <Badge variant="outline">
+                      {PANEL_TYPES[item.type].label}
+                    </Badge>
                     {item.id === panel?.id ? <Badge>Yours</Badge> : null}
                   </p>
                   <p className="mt-1 text-muted-foreground text-sm">

@@ -9,8 +9,12 @@ import {
   attendance,
   evaluationRounds,
   members,
+  PANEL_TYPES,
+  type PanelType,
   panelMembers,
   panels,
+  SCORE_CRITERIA,
+  type ScoreCriterionKey,
   scores,
   submissions,
   teamPanelAssignments,
@@ -512,12 +516,8 @@ export async function overrideTeamStatusAtomically(input: {
   });
 }
 
-export type ScoreCriteria = {
-  problemUnderstanding: number;
-  ideaFeasibility: number;
-  decisionMaking: number;
-  coordination: number;
-};
+/** One judge's marks: only the criteria of their own panel's type. */
+export type ScoreCriteria = Partial<Record<ScoreCriterionKey, number>>;
 
 /**
  * Write one judge's scores for one team in one round.
@@ -526,11 +526,13 @@ export type ScoreCriteria = {
  * from the page that rendered the form: a judge can keep a sheet open across a
  * reassignment, a second tab, or a round switch, and none of those may result
  * in a score the panel no longer owns. The advisory lock is on the team, so two
- * judges of the same panel scoring the same team serialize against each other
- * the way the roster and payment writes already do.
+ * judges scoring the same team serialize against each other the way the roster
+ * and payment writes already do.
  *
- * `scores.score` is a generated column — the four criteria are written and the
- * total falls out of them.
+ * The judge's panel decides the row's type: a Type 1 judge must be the team's
+ * Type 1 panel for the round, a Type 2 judge its Type 2 panel. Only that type's
+ * columns are written; the rest stay NULL, which `scores_shape` insists on.
+ * `scores.score` is a generated column — the total falls out of them.
  */
 export async function upsertPanelScoreAtomically(input: {
   roundId: string;
@@ -551,6 +553,7 @@ export async function upsertPanelScoreAtomically(input: {
     const { rows } = await tx.execute<{
       round_exists: boolean;
       judge_panel_id: string | null;
+      judge_panel_type: PanelType | null;
       assigned_panel_id: string | null;
       team_exists: boolean;
       status: (typeof teams.$inferSelect)["status"] | null;
@@ -559,14 +562,13 @@ export async function upsertPanelScoreAtomically(input: {
     }>(sql`
       SELECT
         r.id IS NOT NULL AS round_exists,
-        (
-          SELECT pm.panel_id FROM panel_members pm
-          WHERE pm.admin_id = ${input.evaluatorId}
-        ) AS judge_panel_id,
+        jp.panel_id AS judge_panel_id,
+        jp.type AS judge_panel_type,
         (
           SELECT tpa.panel_id FROM team_panel_assignments tpa
           WHERE tpa.team_id = ${input.teamId}
             AND tpa.round_id = ${input.roundId}
+            AND tpa.panel_type = jp.type
         ) AS assigned_panel_id,
         t.id IS NOT NULL AS team_exists,
         t.status,
@@ -583,11 +585,17 @@ export async function upsertPanelScoreAtomically(input: {
       FROM (SELECT 1) AS one
       LEFT JOIN evaluation_rounds r ON r.id = ${input.roundId}
       LEFT JOIN teams t ON t.id = ${input.teamId}
+      LEFT JOIN (
+        SELECT pm.panel_id, p.type
+        FROM panel_members pm
+        JOIN panels p ON p.id = pm.panel_id
+        WHERE pm.admin_id = ${input.evaluatorId}
+      ) jp ON true
     `);
 
     const gate = rows[0];
     if (!gate?.round_exists) throw new Error("Evaluation round not found");
-    if (!gate.judge_panel_id)
+    if (!gate.judge_panel_id || !gate.judge_panel_type)
       throw new Error(
         "You are not on a judging panel. Ask an admin to add you.",
       );
@@ -601,11 +609,25 @@ export async function upsertPanelScoreAtomically(input: {
     if (!gate.present)
       throw new Error("This team has not been marked present for this round");
 
+    const panelType = gate.judge_panel_type;
+    const own = new Set<ScoreCriterionKey>(
+      PANEL_TYPES[panelType].criteria.map((c) => c.key),
+    );
+
+    // Every criterion column is written, the other type's as NULL, so an
+    // update can never leave a stale value behind.
+    const marks = Object.fromEntries(
+      SCORE_CRITERIA.map(({ key }) => {
+        const value = input.criteria[key];
+        if (own.has(key) && value === undefined)
+          throw new Error("Every criterion is required");
+        return [key, own.has(key) ? (value as number).toFixed(2) : null];
+      }),
+    ) as Record<ScoreCriterionKey, string | null>;
+
     const values = {
-      problemUnderstanding: input.criteria.problemUnderstanding.toFixed(2),
-      ideaFeasibility: input.criteria.ideaFeasibility.toFixed(2),
-      decisionMaking: input.criteria.decisionMaking.toFixed(2),
-      coordination: input.criteria.coordination.toFixed(2),
+      panelType,
+      ...marks,
       remarks: input.remarks?.trim() || null,
     };
 
@@ -629,9 +651,10 @@ export async function upsertPanelScoreAtomically(input: {
 }
 
 /**
- * Point a set of teams at one panel for one round, replacing whatever panel
- * they were on. `unique(team_id, round_id)` means a team has exactly one panel
- * per round, so the conflict clause is the reassignment.
+ * Point a set of teams at one panel for one round, replacing whatever panel of
+ * the same type they were on. `unique(team_id, round_id, panel_type)` means a
+ * team has at most one panel of each type per round, so the conflict clause is
+ * the reassignment, and it never touches the other type's assignment.
  */
 export async function assignTeamsToPanelAtomically(input: {
   teamIds: string[];
@@ -643,7 +666,7 @@ export async function assignTeamsToPanelAtomically(input: {
 
   return db.transaction(async (tx) => {
     const [panel] = await tx
-      .select({ id: panels.id })
+      .select({ id: panels.id, type: panels.type })
       .from(panels)
       .where(eq(panels.id, input.panelId))
       .limit(1);
@@ -665,11 +688,16 @@ export async function assignTeamsToPanelAtomically(input: {
           teamId,
           roundId: input.roundId,
           panelId: input.panelId,
+          panelType: panel.type,
           assignedBy: input.adminId,
         })),
       )
       .onConflictDoUpdate({
-        target: [teamPanelAssignments.teamId, teamPanelAssignments.roundId],
+        target: [
+          teamPanelAssignments.teamId,
+          teamPanelAssignments.roundId,
+          teamPanelAssignments.panelType,
+        ],
         set: {
           panelId: input.panelId,
           assignedBy: input.adminId,

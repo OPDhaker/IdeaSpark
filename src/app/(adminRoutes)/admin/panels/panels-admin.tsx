@@ -10,6 +10,12 @@ import {
   type getPanelAdminData,
   setPanelJudges,
 } from "@/actions/panel";
+import {
+  PANEL_TYPE_KEYS,
+  PANEL_TYPES,
+  type PanelType,
+  panelMax,
+} from "@/db/schema";
 
 export type PanelAdminData = Awaited<ReturnType<typeof getPanelAdminData>>;
 
@@ -19,6 +25,7 @@ export function PanelsAdmin({ data }: { data: PanelAdminData }) {
   const router = useRouter();
   const searchParams = useSearchParams();
   const [newPanel, setNewPanel] = useState("");
+  const [newPanelType, setNewPanelType] = useState<PanelType>("main");
   const [pending, setPending] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
@@ -48,8 +55,12 @@ export function PanelsAdmin({ data }: { data: PanelAdminData }) {
     }
   }
 
+  // One assignment per team per panel type, so the key carries both.
   const panelOf = new Map(
-    data.assignments.map((row) => [row.teamId, row.panelId]),
+    data.assignments.map((row) => [
+      `${row.teamId}:${row.panelType}`,
+      row.panelId,
+    ]),
   );
   const judgesOf = (panelId: string) =>
     data.judges.filter((judge) => judge.panelId === panelId);
@@ -62,9 +73,10 @@ export function PanelsAdmin({ data }: { data: PanelAdminData }) {
             Judging panels
           </h2>
           <p className="mt-1 text-sm text-[#17201d]/60">
-            A judge sits on one panel. A panel scores the teams assigned to it
-            for a round, and the team&apos;s number is that panel&apos;s
-            average.
+            A judge sits on one panel. Each round a team gets one{" "}
+            {PANEL_TYPES.main.label} panel (out of {panelMax("main")}) and one{" "}
+            {PANEL_TYPES.risk.label} panel (out of {panelMax("risk")}); its day
+            is the two panel averages added together.
           </p>
         </div>
         <label className="text-sm">
@@ -106,17 +118,33 @@ export function PanelsAdmin({ data }: { data: PanelAdminData }) {
             onSubmit={(event) => {
               event.preventDefault();
               if (!newPanel.trim()) return;
-              run(() => createPanel(newPanel), "Panel created.").then(() =>
-                setNewPanel(""),
-              );
+              run(
+                () => createPanel(newPanel, newPanelType),
+                "Panel created.",
+              ).then(() => setNewPanel(""));
             }}
           >
             <input
               value={newPanel}
               onChange={(event) => setNewPanel(event.target.value)}
               placeholder="Panel A"
-              className="flex-1 border border-[#17201d]/20 px-3 py-2 text-sm"
+              className="min-w-0 flex-1 border border-[#17201d]/20 px-3 py-2 text-sm"
             />
+            {/* Fixed once created: delete and recreate a panel to change it. */}
+            <select
+              value={newPanelType}
+              aria-label="Panel type"
+              onChange={(event) =>
+                setNewPanelType(event.target.value as PanelType)
+              }
+              className="border border-[#17201d]/20 bg-white px-2 py-2 text-sm"
+            >
+              {PANEL_TYPE_KEYS.map((type) => (
+                <option key={type} value={type}>
+                  {PANEL_TYPES[type].label}
+                </option>
+              ))}
+            </select>
             <button
               type="submit"
               disabled={pending || !newPanel.trim()}
@@ -140,7 +168,12 @@ export function PanelsAdmin({ data }: { data: PanelAdminData }) {
                   className="border border-[#17201d]/15 bg-[#f7f6f3] p-4"
                 >
                   <div className="flex items-center justify-between gap-3">
-                    <p className="font-medium">{panel.name}</p>
+                    <p className="font-medium">
+                      {panel.name}
+                      <span className="ml-2 border border-[#17201d]/20 px-1.5 py-0.5 text-xs font-normal text-[#17201d]/70">
+                        {PANEL_TYPES[panel.type].label}
+                      </span>
+                    </p>
                     <button
                       type="button"
                       disabled={pending}
@@ -227,7 +260,7 @@ export function PanelsAdmin({ data }: { data: PanelAdminData }) {
             Teams · {round?.name ?? "no round"}
           </h3>
           <p className="mt-1 text-sm text-[#17201d]/55">
-            Accepted and paid teams only. A team scores under exactly one panel
+            Accepted and paid teams only. A team needs one panel of each type
             per round.
           </p>
 
@@ -235,31 +268,41 @@ export function PanelsAdmin({ data }: { data: PanelAdminData }) {
             {data.teams.map((team) => (
               <li
                 key={team.id}
-                className="flex items-center justify-between gap-3 px-4 py-3"
+                className="flex flex-wrap items-center justify-between gap-3 px-4 py-3"
               >
                 <span className="min-w-0 truncate text-sm">
                   {team.teamName}
                 </span>
-                <select
-                  value={panelOf.get(team.id) ?? UNASSIGNED}
-                  disabled={pending || !roundId}
-                  onChange={(event) => {
-                    const panelId = event.target.value;
-                    if (!panelId) return;
-                    run(
-                      () => assignTeamsToPanel(roundId, panelId, [team.id]),
-                      `${team.teamName} assigned.`,
-                    );
-                  }}
-                  className="border border-[#17201d]/20 bg-white px-2 py-1.5 text-sm"
-                >
-                  <option value={UNASSIGNED}>Unassigned</option>
-                  {data.panels.map((panel) => (
-                    <option key={panel.id} value={panel.id}>
-                      {panel.name}
-                    </option>
+                <div className="flex flex-wrap gap-2">
+                  {PANEL_TYPE_KEYS.map((type) => (
+                    <select
+                      key={type}
+                      aria-label={`${PANEL_TYPES[type].label} for ${team.teamName}`}
+                      value={panelOf.get(`${team.id}:${type}`) ?? UNASSIGNED}
+                      disabled={pending || !roundId}
+                      onChange={(event) => {
+                        const panelId = event.target.value;
+                        if (!panelId) return;
+                        run(
+                          () => assignTeamsToPanel(roundId, panelId, [team.id]),
+                          `${team.teamName} assigned.`,
+                        );
+                      }}
+                      className="border border-[#17201d]/20 bg-white px-2 py-1.5 text-sm"
+                    >
+                      <option value={UNASSIGNED}>
+                        {PANEL_TYPES[type].label} | unassigned
+                      </option>
+                      {data.panels
+                        .filter((panel) => panel.type === type)
+                        .map((panel) => (
+                          <option key={panel.id} value={panel.id}>
+                            {PANEL_TYPES[type].label} | {panel.name}
+                          </option>
+                        ))}
+                    </select>
                   ))}
-                </select>
+                </div>
               </li>
             ))}
             {data.teams.length === 0 ? (

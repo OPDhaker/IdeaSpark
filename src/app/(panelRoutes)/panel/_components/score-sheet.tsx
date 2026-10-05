@@ -7,45 +7,45 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { SCORE_CRITERIA, SCORE_MAX } from "@/db/schema";
+import {
+  PANEL_TYPES,
+  type PanelType,
+  panelMax,
+  type ScoreCriterionKey,
+} from "@/db/schema";
 import { cn } from "@/lib/utils";
 
 type PeerScore = {
   evaluatorId: string;
   evaluatorName: string;
-  problemUnderstanding: string;
-  ideaFeasibility: string;
-  decisionMaking: string;
-  coordination: string;
+  panelType: PanelType;
+  problemUnderstanding: string | null;
+  ideaFeasibility: string | null;
+  decisionMaking: string | null;
+  coordination: string | null;
+  riskManagement: string | null;
   score: string | null;
   remarks: string | null;
 };
 
-type Draft = Record<(typeof SCORE_CRITERIA)[number]["key"], string>;
+type Draft = Partial<Record<ScoreCriterionKey, string>>;
 
-const EMPTY: Draft = {
-  problemUnderstanding: "",
-  ideaFeasibility: "",
-  decisionMaking: "",
-  coordination: "",
-};
-
-function toDraft(score: PeerScore | null): Draft {
-  if (!score) return EMPTY;
-  return {
-    // The database hands back `13.00`; a judge typed `13`. Strip the trailing
-    // zeros so reopening a saved sheet shows what was entered.
-    problemUnderstanding: String(Number(score.problemUnderstanding)),
-    ideaFeasibility: String(Number(score.ideaFeasibility)),
-    decisionMaking: String(Number(score.decisionMaking)),
-    coordination: String(Number(score.coordination)),
-  };
+function toDraft(panelType: PanelType, score: PeerScore | null): Draft {
+  return Object.fromEntries(
+    PANEL_TYPES[panelType].criteria.map(({ key }) => {
+      const saved = score?.[key];
+      // The database hands back `13.00`; a judge typed `13`. Strip the
+      // trailing zeros so reopening a saved sheet shows what was entered.
+      return [key, saved == null ? "" : String(Number(saved))];
+    }),
+  );
 }
 
 export function ScoreSheet({
   roundId,
   teamId,
   teamName,
+  panelType,
   myScore,
   peerScores,
   canScore,
@@ -54,6 +54,8 @@ export function ScoreSheet({
   roundId: string;
   teamId: string;
   teamName: string;
+  /** Which half of the rubric this sheet scores. */
+  panelType: PanelType;
   myScore: PeerScore | null;
   /** Every other judge on the panel who has scored this team. */
   peerScores: PeerScore[];
@@ -66,7 +68,7 @@ export function ScoreSheet({
   /** The panel that owns this team, for the read-only explanation. */
   panelName: string | null;
 }) {
-  const [draft, setDraft] = useState<Draft>(() => toDraft(myScore));
+  const [draft, setDraft] = useState<Draft>(() => toDraft(panelType, myScore));
   const [remarks, setRemarks] = useState(myScore?.remarks ?? "");
   const [pending, setPending] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -75,15 +77,17 @@ export function ScoreSheet({
   // Prev/next swaps the team under a mounted form, so the draft has to follow
   // the team rather than only the first render.
   useEffect(() => {
-    setDraft(toDraft(myScore));
+    setDraft(toDraft(panelType, myScore));
     setRemarks(myScore?.remarks ?? "");
     setSaved(false);
     setError("");
-  }, [myScore]);
+  }, [panelType, myScore]);
 
-  const values = SCORE_CRITERIA.map((criterion) => ({
+  const criteria = PANEL_TYPES[panelType].criteria;
+  const max = panelMax(panelType);
+  const values = criteria.map((criterion) => ({
     ...criterion,
-    raw: draft[criterion.key],
+    raw: draft[criterion.key] ?? "",
     value: Number(draft[criterion.key]),
   }));
 
@@ -101,10 +105,7 @@ export function ScoreSheet({
       await upsertScore({
         roundId,
         teamId,
-        problemUnderstanding: Number(draft.problemUnderstanding),
-        ideaFeasibility: Number(draft.ideaFeasibility),
-        decisionMaking: Number(draft.decisionMaking),
-        coordination: Number(draft.coordination),
+        criteria: Object.fromEntries(values.map((v) => [v.key, v.value])),
         remarks,
       });
       setSaved(true);
@@ -186,7 +187,7 @@ export function ScoreSheet({
           <p className="font-serif text-3xl tabular-nums">
             {total === null ? "—" : total}
             <span className="ml-1 text-muted-foreground text-base">
-              / {SCORE_MAX}
+              / {max}
             </span>
           </p>
           <div className="flex items-center gap-3">
@@ -197,8 +198,8 @@ export function ScoreSheet({
               </span>
             ) : null}
             {/*
-              All four criteria are required: `scores.score` is generated from
-              them, so a partial sheet has no total to rank on.
+              Every criterion on the sheet is required: `scores_shape` refuses a
+              partial row, and a partial sheet has no total to rank on.
             */}
             <Button
               type="submit"
@@ -214,7 +215,9 @@ export function ScoreSheet({
 
         {canScore && !complete ? (
           <p className="text-muted-foreground text-xs">
-            Fill all four criteria to save.
+            {criteria.length === 1
+              ? `Fill ${criteria[0].label} to save.`
+              : `Fill all ${criteria.length} criteria to save.`}
           </p>
         ) : null}
         {!canScore ? (
@@ -255,12 +258,18 @@ export function ScoreSheet({
                     {Number(peer.score ?? 0)}
                     <span className="text-muted-foreground text-xs">
                       {" "}
-                      / {SCORE_MAX}
+                      / {panelMax(peer.panelType)}
                     </span>
                   </p>
                 </div>
+                {/* Each peer card reads its own type: the "every team" view mixes both. */}
+                {peer.panelType !== panelType ? (
+                  <p className="mt-1 text-muted-foreground text-xs">
+                    {PANEL_TYPES[peer.panelType].label}
+                  </p>
+                ) : null}
                 <dl className="mt-3 grid gap-1 text-xs">
-                  {SCORE_CRITERIA.map((criterion) => (
+                  {PANEL_TYPES[peer.panelType].criteria.map((criterion) => (
                     <div
                       key={criterion.key}
                       className="flex justify-between gap-3"

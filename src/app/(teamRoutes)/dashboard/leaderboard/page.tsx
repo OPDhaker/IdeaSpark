@@ -1,7 +1,7 @@
 import { Trophy } from "lucide-react";
 import { getLeaderboardView } from "@/app/actions";
 import { Badge } from "@/components/ui/badge";
-import { SCORE_MAX } from "@/db/schema";
+import { DAY_MAX, FINAL_MAX, PANEL_TYPES, panelMax } from "@/db/schema";
 import { cn } from "@/lib/utils";
 import { CardBody, CardTitle, DashCard } from "../_components/panel";
 
@@ -12,11 +12,11 @@ export const metadata = {
 };
 
 /** Ties share a rank: 1, 2, 2, 4. */
-function withRanks(rows: { averageScore: string }[]) {
+function withRanks(rows: { total: string }[]) {
   let rank = 0;
   let previous: number | null = null;
   return rows.map((row, index) => {
-    const score = Number(row.averageScore);
+    const score = Number(row.total);
     if (previous === null || score !== previous) {
       rank = index + 1;
       previous = score;
@@ -59,7 +59,7 @@ export default async function LeaderBoardPage() {
             Leaderboard
           </h1>
           <p className="mt-3 text-muted-foreground text-sm">
-            Ranked by each team&apos;s panel average, out of {SCORE_MAX}.
+            Ranked by the average of both days, out of {FINAL_MAX}.
           </p>
         </header>
 
@@ -78,7 +78,7 @@ export default async function LeaderBoardPage() {
             </div>
           </DashCard>
         ) : (
-          <DashCard className="overflow-hidden p-0">
+          <DashCard className="overflow-x-auto p-0">
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-foreground/15 border-b text-left text-muted-foreground text-xs uppercase tracking-[0.12em]">
@@ -91,8 +91,20 @@ export default async function LeaderBoardPage() {
                   <th scope="col" className="px-6 py-4 font-normal">
                     Track
                   </th>
-                  <th scope="col" className="px-6 py-4 text-right font-normal">
-                    Score / {SCORE_MAX}
+                  {view.rounds.map((round, index) => (
+                    <th
+                      key={round.id}
+                      scope="col"
+                      className="whitespace-nowrap px-6 py-4 text-right font-normal"
+                    >
+                      Day {index + 1}
+                    </th>
+                  ))}
+                  <th
+                    scope="col"
+                    className="whitespace-nowrap px-6 py-4 text-right font-normal"
+                  >
+                    Total / {FINAL_MAX}
                   </th>
                 </tr>
               </thead>
@@ -125,8 +137,21 @@ export default async function LeaderBoardPage() {
                           <span className="text-muted-foreground">|</span>
                         )}
                       </td>
-                      <td className="px-6 py-4 text-right tabular-nums">
-                        {Number(row.averageScore).toFixed(1)}
+                      {view.rounds.map((round) => {
+                        const day = row.days.find(
+                          (d) => d.roundId === round.id,
+                        );
+                        return (
+                          <td
+                            key={round.id}
+                            className="px-6 py-4 text-right text-muted-foreground tabular-nums"
+                          >
+                            {day ? Number(day.total).toFixed(1) : "|"}
+                          </td>
+                        );
+                      })}
+                      <td className="px-6 py-4 text-right font-medium tabular-nums">
+                        {Number(row.total).toFixed(1)}
                       </td>
                     </tr>
                   );
@@ -137,9 +162,12 @@ export default async function LeaderBoardPage() {
         )}
 
         <p className="text-muted-foreground text-xs">
-          Only teams that have been accepted, paid, and scored by at least one
-          judge appear here. A team&apos;s score is its judging panel&apos;s
-          average, taken per criterion, out of {SCORE_MAX}.
+          Each day is out of {DAY_MAX}: {PANEL_TYPES.main.label}&apos;s average
+          out of {panelMax("main")}, plus {PANEL_TYPES.risk.label}&apos;s Risk
+          Management average out of {panelMax("risk")}. The total is the average
+          of both days, so a day a team did not play counts as zero. Only
+          accepted, paid teams scored by both panels on every day they played
+          appear here.
         </p>
       </div>
     </div>

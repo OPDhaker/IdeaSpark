@@ -3,6 +3,7 @@ import {
   boolean,
   check,
   date,
+  foreignKey,
   index,
   integer,
   numeric,
@@ -56,6 +57,13 @@ export const adminRoleEnum = pgEnum("admin_role_enum", [
   "evaluator",
   "volunteer",
 ]);
+
+/**
+ * The two kinds of judging panel. Every event day a team stands in front of
+ * one of each: `main` (Panel Type 1) scores the four core criteria out of 90,
+ * `risk` (Panel Type 2) scores Risk Management out of 10.
+ */
+export const panelTypeEnum = pgEnum("panel_type_enum", ["main", "risk"]);
 
 export const tracks = pgTable("tracks", {
   id: uuid().defaultRandom().primaryKey(),
@@ -262,27 +270,60 @@ export const attendance = pgTable(
 );
 
 /**
- * The judging rubric, out of 50. One row per (team, round, evaluator): every
- * judge on a panel scores the same team on their own screen, and the team's
- * number is the panel's per-criterion mean.
+ * The judging rubric. Each event day a team is scored by two panels: Panel
+ * Type 1 (`main`) on four criteria out of 90 and Panel Type 2 (`risk`) on Risk
+ * Management out of 10, for 100 a day. The final leaderboard averages the days,
+ * so it is out of 100 too.
  *
- * Each criterion carries its own range `check`, so "out of 50" is a property of
+ * One row per (team, round, evaluator). A judge sits on exactly one panel, so a
+ * row carries exactly one panel type, and `scores_shape` makes the columns
+ * agree with it: a `main` row fills the four core criteria and leaves risk
+ * NULL, a `risk` row the reverse.
+ *
+ * Each criterion carries its own range `check`, so the maxima are a property of
  * the columns rather than a separate total that could drift from its parts.
- * `score` is `GENERATED ALWAYS` for the same reason — it is the sum by
+ * `score` is `GENERATED ALWAYS` for the same reason — it is the row's sum by
  * definition, not by whichever action last wrote the row, and a write to it is
  * rejected by the database.
  */
+export const PANEL_TYPES = {
+  main: {
+    label: "Panel Type 1",
+    criteria: [
+      { key: "problemUnderstanding", label: "Problem Understanding", max: 25 },
+      { key: "ideaFeasibility", label: "Idea Feasibility", max: 20 },
+      { key: "decisionMaking", label: "Decision Making", max: 25 },
+      { key: "coordination", label: "Coordination", max: 20 },
+    ],
+  },
+  risk: {
+    label: "Panel Type 2",
+    criteria: [{ key: "riskManagement", label: "Risk Management", max: 10 }],
+  },
+} as const;
+
+export type PanelType = keyof typeof PANEL_TYPES;
+
+export const PANEL_TYPE_KEYS = Object.keys(PANEL_TYPES) as PanelType[];
+
+/** Every criterion across both panel types, in sheet order. */
 export const SCORE_CRITERIA = [
-  { key: "problemUnderstanding", label: "Problem Understanding", max: 15 },
-  { key: "ideaFeasibility", label: "Idea Feasibility", max: 10 },
-  { key: "decisionMaking", label: "Decision Making", max: 15 },
-  { key: "coordination", label: "Coordination", max: 10 },
+  ...PANEL_TYPES.main.criteria,
+  ...PANEL_TYPES.risk.criteria,
 ] as const;
 
 export type ScoreCriterionKey = (typeof SCORE_CRITERIA)[number]["key"];
 
-/** 50 — the rubric total, derived so it cannot fall out of step with the parts. */
-export const SCORE_MAX = SCORE_CRITERIA.reduce((sum, c) => sum + c.max, 0);
+/** 90 for `main`, 10 for `risk`. */
+export function panelMax(type: PanelType): number {
+  return PANEL_TYPES[type].criteria.reduce((sum, c) => sum + c.max, 0);
+}
+
+/** 100 — one day's total, derived so it cannot fall out of step with the parts. */
+export const DAY_MAX = SCORE_CRITERIA.reduce((sum, c) => sum + c.max, 0);
+
+/** The final leaderboard is the mean of the day totals, so it keeps the scale. */
+export const FINAL_MAX = DAY_MAX;
 
 export const scores = pgTable(
   "scores",
@@ -297,22 +338,25 @@ export const scores = pgTable(
     evaluatorId: uuid("evaluator_id")
       .notNull()
       .references(() => admins.id, { onDelete: "cascade" }),
+    /** The type of the judge's panel when the row was written. */
+    panelType: panelTypeEnum("panel_type").notNull(),
     problemUnderstanding: numeric("problem_understanding", {
       precision: 5,
       scale: 2,
-    }).notNull(),
+    }),
     ideaFeasibility: numeric("idea_feasibility", {
       precision: 5,
       scale: 2,
-    }).notNull(),
+    }),
     decisionMaking: numeric("decision_making", {
       precision: 5,
       scale: 2,
-    }).notNull(),
-    coordination: numeric({ precision: 5, scale: 2 }).notNull(),
+    }),
+    coordination: numeric({ precision: 5, scale: 2 }),
+    riskManagement: numeric("risk_management", { precision: 5, scale: 2 }),
     /** Generated: never write this column. */
     score: numeric({ precision: 6, scale: 2 }).generatedAlwaysAs(
-      sql`problem_understanding + idea_feasibility + decision_making + coordination`,
+      sql`coalesce(problem_understanding, 0) + coalesce(idea_feasibility, 0) + coalesce(decision_making, 0) + coalesce(coordination, 0) + coalesce(risk_management, 0)`,
     ),
     remarks: text(),
     createdAt: timestamp("created_at", { withTimezone: true })
@@ -322,19 +366,38 @@ export const scores = pgTable(
   (t) => [
     check(
       "scores_problem_understanding_range",
-      sql`${t.problemUnderstanding} >= 0 AND ${t.problemUnderstanding} <= 15`,
+      sql`${t.problemUnderstanding} >= 0 AND ${t.problemUnderstanding} <= 25`,
     ),
     check(
       "scores_idea_feasibility_range",
-      sql`${t.ideaFeasibility} >= 0 AND ${t.ideaFeasibility} <= 10`,
+      sql`${t.ideaFeasibility} >= 0 AND ${t.ideaFeasibility} <= 20`,
     ),
     check(
       "scores_decision_making_range",
-      sql`${t.decisionMaking} >= 0 AND ${t.decisionMaking} <= 15`,
+      sql`${t.decisionMaking} >= 0 AND ${t.decisionMaking} <= 25`,
     ),
     check(
       "scores_coordination_range",
-      sql`${t.coordination} >= 0 AND ${t.coordination} <= 10`,
+      sql`${t.coordination} >= 0 AND ${t.coordination} <= 20`,
+    ),
+    check(
+      "scores_risk_management_range",
+      sql`${t.riskManagement} >= 0 AND ${t.riskManagement} <= 10`,
+    ),
+    check(
+      "scores_shape",
+      sql`(${t.panelType} = 'main'
+        AND ${t.problemUnderstanding} IS NOT NULL
+        AND ${t.ideaFeasibility} IS NOT NULL
+        AND ${t.decisionMaking} IS NOT NULL
+        AND ${t.coordination} IS NOT NULL
+        AND ${t.riskManagement} IS NULL)
+      OR (${t.panelType} = 'risk'
+        AND ${t.problemUnderstanding} IS NULL
+        AND ${t.ideaFeasibility} IS NULL
+        AND ${t.decisionMaking} IS NULL
+        AND ${t.coordination} IS NULL
+        AND ${t.riskManagement} IS NOT NULL)`,
     ),
     unique("scores_team_round_evaluator_unique").on(
       t.teamId,
@@ -348,19 +411,25 @@ export const scores = pgTable(
 );
 
 /**
- * A judging panel: two or more evaluators who score the same teams and whose
- * scores average into one number per team.
+ * A judging panel: evaluators who score the same teams and whose scores average
+ * into one number per team. `type` is fixed at creation — assignments copy it,
+ * and the composite foreign key below needs it to never change underneath them.
  */
 export const panels = pgTable(
   "panels",
   {
     id: uuid().defaultRandom().primaryKey(),
     name: varchar({ length: 128 }).notNull().unique(),
+    type: panelTypeEnum().notNull().default("main"),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
       .defaultNow(),
   },
-  (t) => [check("panels_name_not_blank", sql`length(trim(${t.name})) > 0`)],
+  (t) => [
+    check("panels_name_not_blank", sql`length(trim(${t.name})) > 0`),
+    // Target of the assignments' composite foreign key.
+    unique("panels_id_type_unique").on(t.id, t.type),
+  ],
 );
 
 /**
@@ -385,7 +454,12 @@ export const panelMembers = pgTable(
   ],
 );
 
-/** Which panel judges which team, per round. Set by a super admin. */
+/**
+ * Which panels judge which team, per round. Set by a super admin. A team has at
+ * most one panel of each type per round. `panelType` is a copy of the panel's
+ * type, held honest by the composite foreign key, so the uniqueness can be
+ * declared on this table.
+ */
 export const teamPanelAssignments = pgTable(
   "team_panel_assignments",
   {
@@ -396,9 +470,8 @@ export const teamPanelAssignments = pgTable(
     roundId: uuid("round_id")
       .notNull()
       .references(() => evaluationRounds.id, { onDelete: "cascade" }),
-    panelId: uuid("panel_id")
-      .notNull()
-      .references(() => panels.id, { onDelete: "cascade" }),
+    panelId: uuid("panel_id").notNull(),
+    panelType: panelTypeEnum("panel_type").notNull(),
     assignedBy: uuid("assigned_by").references(() => admins.id, {
       onDelete: "set null",
     }),
@@ -407,7 +480,16 @@ export const teamPanelAssignments = pgTable(
       .defaultNow(),
   },
   (t) => [
-    unique("team_panel_assignments_team_round_unique").on(t.teamId, t.roundId),
+    foreignKey({
+      name: "team_panel_assignments_panel_fk",
+      columns: [t.panelId, t.panelType],
+      foreignColumns: [panels.id, panels.type],
+    }).onDelete("cascade"),
+    unique("team_panel_assignments_team_round_type_unique").on(
+      t.teamId,
+      t.roundId,
+      t.panelType,
+    ),
     index("team_panel_assignments_round_panel_idx").on(t.roundId, t.panelId),
     index("team_panel_assignments_team_id_idx").on(t.teamId),
   ],

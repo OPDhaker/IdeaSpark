@@ -14,9 +14,19 @@ import {
   listAssignments,
   listEvaluationRounds,
 } from "@/db/queries";
-import { admins, panels, SCORE_CRITERIA, teams, tracks } from "@/db/schema";
+import {
+  admins,
+  PANEL_TYPE_KEYS,
+  PANEL_TYPES,
+  type PanelType,
+  panels,
+  type ScoreCriterionKey,
+  teams,
+  tracks,
+} from "@/db/schema";
 import {
   assignTeamsToPanelAtomically,
+  type ScoreCriteria,
   setPanelJudgesAtomically,
   upsertPanelScoreAtomically,
 } from "@/db/transactions";
@@ -50,9 +60,19 @@ export type PanelSheet = {
   panel: Awaited<ReturnType<typeof getPanelForAdmin>>;
   admin: { id: string; name: string; isSuperAdmin: boolean };
   /** Panels to choose between. Empty for a judge, who sees only their own. */
-  panelOptions: Array<{ id: string; name: string; teamCount: number }>;
+  panelOptions: Array<{
+    id: string;
+    name: string;
+    type: PanelType;
+    teamCount: number;
+  }>;
   /** Which panel's queue is being shown; null means "every team". */
   viewingPanelId: string | null;
+  /**
+   * Which rubric the sheet shows: the viewed panel's type, or in the "every
+   * team" view the caller's own panel's type (`main` if they have none).
+   */
+  panelType: PanelType;
   teams: PanelSheetTeam[];
   current: PanelSheetTeam | null;
   /** Zero-based index of `current` in `teams`; -1 when there is none. */
@@ -66,36 +86,48 @@ export type PanelSheet = {
 export type ScoreInput = {
   roundId: string;
   teamId: string;
-  problemUnderstanding: number;
-  ideaFeasibility: number;
-  decisionMaking: number;
-  coordination: number;
+  /** The criteria of the judge's own panel type; anything else is refused. */
+  criteria: ScoreCriteria;
   remarks?: string;
 };
 
 /**
- * Save one judge's rubric for one team. Every criterion is required — a
- * half-filled sheet has no total, and `scores.score` is generated from all
- * four.
+ * Save one judge's rubric for one team. Which criteria apply comes from the
+ * judge's panel: Panel Type 1 fills the four core criteria, Panel Type 2 only
+ * Risk Management. Every one of them is required — a half-filled sheet has no
+ * total.
  *
  * The range check here is the friendly one; the database enforces the same
- * bounds as `check` constraints, and the assignment/presence gates live in the
- * transaction so a stale page cannot slip past them.
+ * bounds and shape as `check` constraints, and the assignment/presence gates
+ * live in the transaction so a stale page cannot slip past them.
  */
 export async function upsertScore(input: ScoreInput) {
   const admin = await requireAdminRole([...JUDGE_ROLES]);
 
-  const criteria = {
-    problemUnderstanding: input.problemUnderstanding,
-    ideaFeasibility: input.ideaFeasibility,
-    decisionMaking: input.decisionMaking,
-    coordination: input.coordination,
-  };
+  const panel = await getPanelForAdmin(admin.id);
+  if (!panel)
+    throw new Error("You are not on a judging panel. Ask an admin to add you.");
 
-  for (const { key, label, max } of SCORE_CRITERIA) {
-    const value = criteria[key];
-    if (!Number.isFinite(value) || value < 0 || value > max)
+  const own = PANEL_TYPES[panel.type].criteria;
+  const ownKeys = new Set<ScoreCriterionKey>(own.map((c) => c.key));
+  for (const key of Object.keys(input.criteria) as ScoreCriterionKey[]) {
+    if (!ownKeys.has(key))
+      throw new Error(
+        `${PANEL_TYPES[panel.type].label} does not score that criterion`,
+      );
+  }
+
+  const criteria: ScoreCriteria = {};
+  for (const { key, label, max } of own) {
+    const value = input.criteria[key];
+    if (
+      value === undefined ||
+      !Number.isFinite(value) ||
+      value < 0 ||
+      value > max
+    )
       throw new Error(`${label} must be between 0 and ${max}`);
+    criteria[key] = value;
   }
 
   const row = await upsertPanelScoreAtomically({
@@ -108,6 +140,7 @@ export async function upsertScore(input: ScoreInput) {
 
   log(admin.id, "score.upsert", "team", input.teamId, {
     roundId: input.roundId,
+    panelType: panel.type,
     ...criteria,
   });
 
@@ -173,6 +206,7 @@ export async function getPanelSheet(
     admin: me,
     panelOptions: [],
     viewingPanelId: null,
+    panelType: "main",
     teams: [],
     current: null,
     position: -1,
@@ -201,9 +235,20 @@ export async function getPanelSheet(
       : (panelFilter ?? panel?.id ?? null)
     : (panel?.id ?? null);
 
+  // A super admin viewing another panel sees that panel's rubric. In the
+  // "every team" view the queue is listed against the caller's own type, so
+  // the panel shown beside each team is the one they could score for.
+  const viewedType =
+    viewingPanelId === panel?.id
+      ? panel?.type
+      : panelOptions.find((p) => p.id === viewingPanelId)?.type;
+  const panelType: PanelType =
+    (viewingPanelId ? viewedType : panel?.type) ?? "main";
+
   const { teams: queue, scores: scoreRows } = await getPanelQueue({
     roundId: round.id,
     panelId: viewingPanelId,
+    panelType,
     eventDate: round.eventDate,
   });
 
@@ -244,6 +289,7 @@ export async function getPanelSheet(
     admin: me,
     panelOptions,
     viewingPanelId,
+    panelType,
     teams: entries,
     current,
     position: current ? position : -1,
@@ -269,13 +315,22 @@ export async function getPanelLeaderboardView(slug: string) {
 
 // --- Admin: panels and assignments -----------------------------------------
 
-export async function createPanel(name: string) {
+/**
+ * A panel's type is chosen here and never edited: its assignments carry a copy
+ * of it, and changing it would re-point every team it judges at the wrong half
+ * of the rubric. A panel of the wrong type is deleted and recreated.
+ */
+export async function createPanel(name: string, type: PanelType) {
   const admin = await requireAdminRole(["super_admin"]);
   const trimmed = name.trim();
   if (!trimmed) throw new Error("Panel name is required");
+  if (!PANEL_TYPE_KEYS.includes(type)) throw new Error("Unknown panel type");
 
-  const [row] = await db.insert(panels).values({ name: trimmed }).returning();
-  log(admin.id, "panel.create", "panel", row.id, { name: trimmed });
+  const [row] = await db
+    .insert(panels)
+    .values({ name: trimmed, type })
+    .returning();
+  log(admin.id, "panel.create", "panel", row.id, { name: trimmed, type });
   revalidatePath("/admin/panels");
   return row;
 }

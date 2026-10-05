@@ -3,7 +3,7 @@
 import { and, count, eq, inArray, or, sql } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { db } from "@/db";
-import { getLeaderboard } from "@/db/queries";
+import { getLeaderboard, listEvaluationRounds } from "@/db/queries";
 import {
   admins,
   announcements,
@@ -709,7 +709,7 @@ export async function submitPaymentId(paymentId: string) {
  *
  * `getLeaderboard()` inner-joins `scores`, so a team nobody has scored yet is
  * absent from the list rather than ranked last — an empty board is the normal
- * state until judging starts.
+ * state until judging starts. `rounds` gives the page one column per day.
  */
 export async function getLeaderboardView() {
   const user = await requireLead();
@@ -719,13 +719,17 @@ export async function getLeaderboardView() {
   ]);
 
   if (!visible) {
-    return { visible: false as const, rows: [], myTeamId: null };
+    return { visible: false as const, rows: [], rounds: [], myTeamId: null };
   }
 
-  const rows = await getLeaderboard();
+  const [rows, rounds] = await Promise.all([
+    getLeaderboard(),
+    listEvaluationRounds(),
+  ]);
   return {
     visible: true as const,
     rows,
+    rounds: rounds.map((r) => ({ id: r.id, name: r.name })),
     myTeamId: team?.id ?? null,
   };
 }

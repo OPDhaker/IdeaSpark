@@ -145,6 +145,7 @@ export default async function PanelRoundPage({
             roundId={sheet.round.id}
             teamId={current.id}
             teamName={current.teamName}
+            panelType={sheet.panelType}
             myScore={sheet.myScore}
             peerScores={peers}
             canScore={current.canScore}
