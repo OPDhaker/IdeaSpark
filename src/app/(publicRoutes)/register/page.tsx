@@ -4,6 +4,7 @@ import { getDepartments, getMyTeam, getTracks } from "@/app/actions";
 import { db } from "@/db";
 import { eventConfig } from "@/db/schema";
 import { auth } from "@/lib/auth/server";
+import { getAdminActor } from "@/lib/roles";
 import { RegistrationForm } from "./_components/registration-form";
 
 export const dynamic = "force-dynamic";
@@ -27,12 +28,16 @@ export default async function RegisterPage() {
   const { data: session } = await auth.getSession();
   if (!session?.user) redirect("/login");
 
-  const [team, tracks, departments, [config]] = await Promise.all([
+  const [admin, team, tracks, departments, [config]] = await Promise.all([
+    getAdminActor(),
     getMyTeam(),
     getTracks(),
     getDepartments(),
     db.select().from(eventConfig).where(eq(eventConfig.id, 1)).limit(1),
   ]);
+  // Login always lands here (see `callbackURL` in /login), so judges are
+  // bounced to their panel rather than shown the team registration form.
+  if (admin?.role === "evaluator") redirect("/panel");
   if (team) redirect("/dashboard");
 
   return (
