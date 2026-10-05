@@ -1,6 +1,6 @@
 "use client";
 
-import { CheckCheck } from "lucide-react";
+import { BadgeCheck, CheckCheck, TriangleAlert } from "lucide-react";
 import { useState, useTransition } from "react";
 import { toast } from "sonner";
 import { setTeamAttendance, type TeamAttendance } from "@/actions/attendance";
@@ -175,6 +175,18 @@ function SheetBody({
     });
   }
 
+  const payment = data.paymentVerified ? (
+    <p className="flex items-center gap-2 rounded-md border border-primary/30 bg-primary/5 px-3 py-2 text-sm font-medium text-primary">
+      <BadgeCheck aria-hidden className="size-4 shrink-0" />
+      Payment verified
+    </p>
+  ) : (
+    <p className="flex items-center gap-2 rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm font-medium text-destructive">
+      <TriangleAlert aria-hidden className="size-4 shrink-0" />
+      Please manually verify
+    </p>
+  );
+
   const list = (
     <ItemGroup className="gap-2">
       {data.members.map((member) => {
@@ -250,7 +262,10 @@ function SheetBody({
   if (isMobile) {
     return (
       <>
-        <div className="overflow-y-auto px-4">{list}</div>
+        <div className="flex flex-col gap-3 overflow-y-auto px-4">
+          {payment}
+          {list}
+        </div>
         <DrawerFooter>{actions}</DrawerFooter>
       </>
     );
@@ -258,6 +273,7 @@ function SheetBody({
 
   return (
     <>
+      {payment}
       {list}
       <DialogFooter className="sm:flex-row-reverse sm:justify-start">
         {actions}

@@ -11,6 +11,7 @@ import {
 import { eventConfig } from "@/db/schema";
 import { setTeamAttendanceAtomically } from "@/db/transactions";
 import { log } from "@/lib/audit";
+import { isPaymentVerified } from "@/lib/payment-verification";
 import { requireAdminRole } from "@/lib/roles";
 
 const SCAN_ROLES = ["volunteer", "super_admin"] as const;
@@ -44,6 +45,11 @@ async function resolveScanDate() {
 export type TeamAttendance = {
   eventDate: string;
   team: { id: string; teamName: string; trackName: string | null };
+  /**
+   * Whether the team's self-reported payment ID is in the Razorpay export.
+   * Informational: `false` sends the desk to check by hand, it blocks nothing.
+   */
+  paymentVerified: boolean;
   members: Awaited<ReturnType<typeof getTeamAttendanceRoster>>;
 };
 
@@ -115,6 +121,7 @@ export async function lookupTeamAttendance(
   return {
     eventDate,
     team: { id: team.id, teamName: team.teamName, trackName: team.trackName },
+    paymentVerified: isPaymentVerified(team.paymentId),
     members: await getTeamAttendanceRoster(team.id, eventDate),
   };
 }

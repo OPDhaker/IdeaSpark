@@ -391,6 +391,7 @@ export async function findTeamByAttendanceCode(attendanceCode: string) {
       id: teams.id,
       teamName: teams.teamName,
       paymentStatus: teams.paymentStatus,
+      paymentId: teams.paymentId,
       trackName: tracks.name,
     })
     .from(teams)
