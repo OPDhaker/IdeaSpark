@@ -495,6 +495,52 @@ export const teamPanelAssignments = pgTable(
   ],
 );
 
+/**
+ * Where a team is in its round, as the volunteers on the floor see it. Set at
+ * `/admin/team-panels`; it gates nothing and is not scored. Labels live here so
+ * the UI derives from one place.
+ */
+export const TEAM_PROGRESS = {
+  todo: "To be done",
+  ongoing: "Ongoing",
+  done: "Done",
+} as const;
+
+export type TeamProgress = keyof typeof TEAM_PROGRESS;
+
+export const TEAM_PROGRESS_KEYS = Object.keys(TEAM_PROGRESS) as TeamProgress[];
+
+export const teamProgressEnum = pgEnum("team_progress_enum", [
+  "todo",
+  "ongoing",
+  "done",
+]);
+
+/**
+ * One progress mark per team per round. No row means "To be done", so a new
+ * round starts clean without seeding. Kept off `team_panel_assignments` so
+ * moving a team to another panel never resets it.
+ */
+export const teamRoundProgress = pgTable(
+  "team_round_progress",
+  {
+    teamId: uuid("team_id")
+      .notNull()
+      .references(() => teams.id, { onDelete: "cascade" }),
+    roundId: uuid("round_id")
+      .notNull()
+      .references(() => evaluationRounds.id, { onDelete: "cascade" }),
+    status: teamProgressEnum().notNull(),
+    updatedBy: uuid("updated_by").references(() => admins.id, {
+      onDelete: "set null",
+    }),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [primaryKey({ columns: [t.teamId, t.roundId] })],
+);
+
 export const eventConfig = pgTable(
   "event_config",
   {

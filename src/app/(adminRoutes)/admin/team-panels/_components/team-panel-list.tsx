@@ -2,7 +2,9 @@
 
 import { ChevronDown, Search } from "lucide-react";
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useEffect, useOptimistic, useState, useTransition } from "react";
+import { toast } from "sonner";
+import { setTeamProgress } from "@/actions/team-progress";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -19,6 +21,11 @@ import {
   NativeSelect,
   NativeSelectOption,
 } from "@/components/ui/native-select";
+import {
+  TEAM_PROGRESS,
+  TEAM_PROGRESS_KEYS,
+  type TeamProgress,
+} from "@/db/schema";
 import { cn } from "@/lib/utils";
 
 type Row = {
@@ -27,6 +34,7 @@ type Row = {
   trackName: string | null;
   panelId: string | null;
   panelName: string | null;
+  status: TeamProgress;
 };
 
 type Sort = "panel" | "team" | "track";
@@ -36,6 +44,50 @@ const UNASSIGNED = "none";
 const STORAGE_KEY = "team-panels:panels";
 
 const panelKey = (row: Row) => row.panelId ?? UNASSIGNED;
+
+/** The selected segment's look. Unselected segments stay plain. */
+const PROGRESS_ON: Record<TeamProgress, string> = {
+  todo: "bg-background text-foreground shadow-xs",
+  ongoing: "bg-chart-3 text-white shadow-xs",
+  done: "bg-primary text-primary-foreground shadow-xs",
+};
+
+/**
+ * Three-way To be done | Ongoing | Done switch. Full width with thumb-sized
+ * segments on a phone, compact beside the row on a wide screen.
+ */
+function ProgressControl({
+  teamName,
+  status,
+  onChange,
+}: {
+  teamName: string;
+  status: TeamProgress;
+  onChange: (status: TeamProgress) => void;
+}) {
+  return (
+    <fieldset
+      aria-label={`Progress for ${teamName}`}
+      className="flex w-full min-w-0 rounded-md bg-muted p-1 lg:w-auto"
+    >
+      {TEAM_PROGRESS_KEYS.map((key) => (
+        <button
+          key={key}
+          type="button"
+          aria-pressed={status === key}
+          onClick={() => status !== key && onChange(key)}
+          className={cn(
+            "h-10 flex-1 whitespace-nowrap rounded-sm px-2 font-medium text-muted-foreground text-sm transition-colors lg:h-8 lg:flex-none lg:px-3 lg:text-xs",
+            "focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50",
+            status === key ? PROGRESS_ON[key] : "hover:text-foreground",
+          )}
+        >
+          {TEAM_PROGRESS[key]}
+        </button>
+      ))}
+    </fieldset>
+  );
+}
 
 function secondsSince(iso: string) {
   return Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 1000));
@@ -101,12 +153,14 @@ function groupRows(rows: Row[], sort: Sort) {
 export function TeamPanelList({
   rows,
   rounds,
+  roundId,
   roundSlug,
   initialPanels,
   fetchedAt,
 }: {
   rows: Row[];
   rounds: Array<{ slug: string; name: string }>;
+  roundId: string;
   roundSlug: string;
   /** From `?panel=`; `null` when the URL names none, so storage may fill in. */
   initialPanels: string[] | null;
@@ -115,6 +169,28 @@ export function TeamPanelList({
   const [query, setQuery] = useState("");
   const [sort, setSort] = useState<Sort>("panel");
   const [picked, setPicked] = useState<string[]>(initialPanels ?? []);
+
+  // The tap shows at once; the action's revalidation then hands back the real
+  // rows (including other volunteers' marks), and a failure falls back to them.
+  const [shown, markOptimistic] = useOptimistic(
+    rows,
+    (current, change: { teamId: string; status: TeamProgress }) =>
+      current.map((row) =>
+        row.teamId === change.teamId ? { ...row, status: change.status } : row,
+      ),
+  );
+  const [, startTransition] = useTransition();
+
+  function changeProgress(row: Row, status: TeamProgress) {
+    startTransition(async () => {
+      markOptimistic({ teamId: row.teamId, status });
+      try {
+        await setTeamProgress({ teamId: row.teamId, roundId, status });
+      } catch {
+        toast.error(`Could not update ${row.teamName}. Try again.`);
+      }
+    });
+  }
 
   // A volunteer opening the page from the sidebar has no `?panel=`, so bring
   // back the panels they ticked last time on this device.
@@ -168,7 +244,7 @@ export function TeamPanelList({
   const active = picked.filter((id) => options.has(id));
 
   const needle = query.trim().toLowerCase();
-  const visible = rows.filter(
+  const visible = shown.filter(
     (row) =>
       (active.length === 0 || active.includes(panelKey(row))) &&
       (!needle ||
@@ -178,6 +254,10 @@ export function TeamPanelList({
   );
   const unassigned = rows.filter((row) => !row.panelId).length;
   const groups = groupRows(visible, sort);
+  const progressCounts = TEAM_PROGRESS_KEYS.map(
+    (key) =>
+      `${visible.filter((row) => row.status === key).length} ${TEAM_PROGRESS[key].toLowerCase()}`,
+  ).join(" | ");
 
   const triggerLabel =
     active.length === 0
@@ -291,6 +371,8 @@ export function TeamPanelList({
             ? `${rows.length} teams`
             : `${visible.length} of ${rows.length} teams`}
           {unassigned > 0 ? ` | ${unassigned} not assigned` : null}
+          <br />
+          {progressCounts}
         </span>
         <UpdatedAgo fetchedAt={fetchedAt} />
       </div>
@@ -307,10 +389,11 @@ export function TeamPanelList({
         </p>
       ) : (
         <div className="overflow-hidden rounded-md border border-foreground/15">
-          <div className="hidden grid-cols-[2fr_1.5fr_1.25fr] gap-4 border-foreground/15 border-b bg-muted/40 px-4 py-2 font-medium text-muted-foreground text-xs md:grid">
+          <div className="hidden grid-cols-[1.5fr_1fr_1fr_auto] gap-4 border-foreground/15 border-b bg-muted/40 px-4 py-2 font-medium text-muted-foreground text-xs lg:grid">
             <span>Team</span>
             <span>Track</span>
             <span>Panel</span>
+            <span>Progress</span>
           </div>
           {groups.map((group) => (
             <section key={group.key} aria-label={group.title ?? undefined}>
@@ -327,15 +410,15 @@ export function TeamPanelList({
                 {group.rows.map((row) => (
                   <li
                     key={row.teamId}
-                    className="grid grid-cols-[1fr_auto] items-center gap-x-4 gap-y-0.5 px-4 py-3 md:grid-cols-[2fr_1.5fr_1.25fr]"
+                    className="grid grid-cols-[1fr_auto] items-center gap-x-4 gap-y-0.5 px-4 py-3 lg:grid-cols-[1.5fr_1fr_1fr_auto]"
                   >
                     <span className="min-w-0 truncate font-medium">
                       {row.teamName}
                     </span>
-                    <span className="col-start-1 row-start-2 min-w-0 truncate text-muted-foreground text-sm md:col-start-auto md:row-start-auto">
+                    <span className="col-start-1 row-start-2 min-w-0 truncate text-muted-foreground text-sm lg:col-start-auto lg:row-start-auto">
                       {row.trackName ?? "No track"}
                     </span>
-                    <span className="col-start-2 row-span-2 row-start-1 justify-self-end md:col-start-auto md:row-span-1 md:row-start-auto md:justify-self-start">
+                    <span className="col-start-2 row-span-2 row-start-1 justify-self-end lg:col-start-auto lg:row-span-1 lg:row-start-auto lg:justify-self-start">
                       {row.panelName ? (
                         <Badge className="max-w-40 truncate text-sm">
                           {row.panelName}
@@ -346,6 +429,13 @@ export function TeamPanelList({
                         </span>
                       )}
                     </span>
+                    <div className="col-span-2 row-start-3 mt-2 lg:col-span-1 lg:row-start-auto lg:mt-0">
+                      <ProgressControl
+                        teamName={row.teamName}
+                        status={row.status}
+                        onChange={(status) => changeProgress(row, status)}
+                      />
+                    </div>
                   </li>
                 ))}
               </ul>

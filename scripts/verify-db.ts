@@ -18,6 +18,7 @@ const expected = [
   "panels",
   "panel_members",
   "team_panel_assignments",
+  "team_round_progress",
 ];
 
 const rows = await db.execute(sql`

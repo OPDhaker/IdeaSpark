@@ -56,6 +56,7 @@ export default async function TeamPanelsPage({
       <TeamPanelList
         rows={rows}
         rounds={rounds.map((r) => ({ slug: r.slug, name: r.name }))}
+        roundId={selected.id}
         roundSlug={selected.slug}
         initialPanels={initialPanels}
         fetchedAt={new Date().toISOString()}
@@ -67,13 +68,13 @@ export default async function TeamPanelsPage({
 function Shell({ children }: { children: React.ReactNode }) {
   return (
     <div className="px-4 py-6 md:p-12">
-      <div className="mx-auto flex w-full max-w-3xl flex-col gap-6">
+      <div className="mx-auto flex w-full max-w-5xl flex-col gap-6">
         <header>
           <h1 className="font-serif text-4xl leading-none tracking-[-0.03em] md:text-5xl">
             Team panels
           </h1>
           <p className="mt-2 text-muted-foreground text-sm">
-            Each team's Type 1 panel. Updates live as panels are assigned.
+            Each team's Type 1 panel and progress. Updates live.
           </p>
         </header>
         {children}

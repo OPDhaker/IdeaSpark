@@ -22,7 +22,9 @@ import {
   panels,
   scores,
   submissions,
+  type TeamProgress,
   teamPanelAssignments,
+  teamRoundProgress,
   teams,
   tracks,
 } from "./schema";
@@ -454,7 +456,7 @@ export async function listAssignments(roundId: string) {
 
 /**
  * The volunteers' "which room is this team in" list for one round: every team
- * with its Type 1 (`main`) panel. Accepted, paid teams with no Type 1 panel
+ * with its Type 1 (`main`) panel and its progress mark for the round. Accepted, paid teams with no Type 1 panel
  * yet come back with `panelName: null`, so a gap shows as "Not assigned"
  * instead of the team being missing from the list.
  */
@@ -466,6 +468,8 @@ export async function getTeamPanelDirectory(roundId: string) {
       trackName: tracks.name,
       panelId: panels.id,
       panelName: panels.name,
+      // No progress row yet means the team has not been started.
+      status: sql<TeamProgress>`coalesce(${teamRoundProgress.status}, 'todo')`,
     })
     .from(teams)
     .leftJoin(tracks, eq(teams.trackId, tracks.id))
@@ -478,6 +482,13 @@ export async function getTeamPanelDirectory(roundId: string) {
       ),
     )
     .leftJoin(panels, eq(teamPanelAssignments.panelId, panels.id))
+    .leftJoin(
+      teamRoundProgress,
+      and(
+        eq(teamRoundProgress.teamId, teams.id),
+        eq(teamRoundProgress.roundId, roundId),
+      ),
+    )
     .where(
       or(
         isNotNull(teamPanelAssignments.id),
