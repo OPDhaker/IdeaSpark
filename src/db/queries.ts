@@ -1,4 +1,14 @@
-import { and, asc, desc, eq, ilike, inArray, sql } from "drizzle-orm";
+import {
+  and,
+  asc,
+  desc,
+  eq,
+  ilike,
+  inArray,
+  isNotNull,
+  or,
+  sql,
+} from "drizzle-orm";
 import { db } from "./index";
 import {
   admins,
@@ -440,6 +450,41 @@ export async function listAssignments(roundId: string) {
     })
     .from(teamPanelAssignments)
     .where(eq(teamPanelAssignments.roundId, roundId));
+}
+
+/**
+ * The volunteers' "which room is this team in" list for one round: every team
+ * with its Type 1 (`main`) panel. Accepted, paid teams with no Type 1 panel
+ * yet come back with `panelName: null`, so a gap shows as "Not assigned"
+ * instead of the team being missing from the list.
+ */
+export async function getTeamPanelDirectory(roundId: string) {
+  return db
+    .select({
+      teamId: teams.id,
+      teamName: teams.teamName,
+      trackName: tracks.name,
+      panelId: panels.id,
+      panelName: panels.name,
+    })
+    .from(teams)
+    .leftJoin(tracks, eq(teams.trackId, tracks.id))
+    .leftJoin(
+      teamPanelAssignments,
+      and(
+        eq(teamPanelAssignments.teamId, teams.id),
+        eq(teamPanelAssignments.roundId, roundId),
+        eq(teamPanelAssignments.panelType, "main"),
+      ),
+    )
+    .leftJoin(panels, eq(teamPanelAssignments.panelId, panels.id))
+    .where(
+      or(
+        isNotNull(teamPanelAssignments.id),
+        and(eq(teams.status, "accepted"), eq(teams.paymentStatus, "paid")),
+      ),
+    )
+    .orderBy(asc(teams.teamName));
 }
 
 export async function getEventConfig() {

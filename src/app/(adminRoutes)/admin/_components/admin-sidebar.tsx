@@ -7,6 +7,7 @@ import {
   LogOut,
   ScanLine,
   Settings2,
+  Table2,
   Users,
 } from "lucide-react";
 import Image from "next/image";
@@ -38,6 +39,12 @@ const NAV = [
     href: "/admin/attendance",
     label: "Mark attendance",
     icon: ScanLine,
+    roles: ["super_admin", "volunteer"],
+  },
+  {
+    href: "/admin/team-panels",
+    label: "Team panels",
+    icon: Table2,
     roles: ["super_admin", "volunteer"],
   },
   {
