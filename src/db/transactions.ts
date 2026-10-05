@@ -650,11 +650,57 @@ export async function upsertPanelScoreAtomically(input: {
   });
 }
 
+type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
+
+/**
+ * The reassignment itself. `unique(team_id, round_id, panel_type)` means a team
+ * has at most one panel of each type per round, so the conflict clause is the
+ * reassignment, and it never touches the other type's assignment.
+ */
+function upsertAssignments(
+  tx: Tx,
+  rows: { teamId: string; panelId: string }[],
+  input: { roundId: string; panelType: PanelType; adminId: string },
+) {
+  return tx
+    .insert(teamPanelAssignments)
+    .values(
+      rows.map((row) => ({
+        teamId: row.teamId,
+        roundId: input.roundId,
+        panelId: row.panelId,
+        panelType: input.panelType,
+        assignedBy: input.adminId,
+      })),
+    )
+    .onConflictDoUpdate({
+      target: [
+        teamPanelAssignments.teamId,
+        teamPanelAssignments.roundId,
+        teamPanelAssignments.panelType,
+      ],
+      set: {
+        panelId: sql`excluded.panel_id`,
+        assignedBy: input.adminId,
+        assignedAt: new Date(),
+      },
+    })
+    .returning();
+}
+
+async function assertRoundExists(tx: Tx, roundId: string) {
+  const [round] = await tx
+    .select({ id: evaluationRounds.id })
+    .from(evaluationRounds)
+    .where(eq(evaluationRounds.id, roundId))
+    .limit(1);
+
+  if (!round) throw new Error("Evaluation round not found");
+}
+
 /**
  * Point a set of teams at one panel for one round, replacing whatever panel of
- * the same type they were on. `unique(team_id, round_id, panel_type)` means a
- * team has at most one panel of each type per round, so the conflict clause is
- * the reassignment, and it never touches the other type's assignment.
+ * the same type they were on.
  */
 export async function assignTeamsToPanelAtomically(input: {
   teamIds: string[];
@@ -672,39 +718,130 @@ export async function assignTeamsToPanelAtomically(input: {
       .limit(1);
 
     if (!panel) throw new Error("Panel not found");
+    await assertRoundExists(tx, input.roundId);
 
-    const [round] = await tx
-      .select({ id: evaluationRounds.id })
-      .from(evaluationRounds)
-      .where(eq(evaluationRounds.id, input.roundId))
-      .limit(1);
+    return upsertAssignments(
+      tx,
+      input.teamIds.map((teamId) => ({ teamId, panelId: input.panelId })),
+      { roundId: input.roundId, panelType: panel.type, adminId: input.adminId },
+    );
+  });
+}
 
-    if (!round) throw new Error("Evaluation round not found");
+/**
+ * Give one track's accepted, paid teams to one or more panels of the same type
+ * for a round, split evenly. Big tracks (Open Innovation) go to two panels and
+ * land half on each.
+ *
+ * The team list is read here, not taken from the client, so a stale page can't
+ * assign a team that has since dropped out. By default a team that already has
+ * a panel of this type is left where it is; `includeAssigned` moves it too.
+ *
+ * Each panel starts at the number of this track's teams it already holds (zero
+ * when everything is being moved), and teams are dealt A–Z to the lightest
+ * panel. A fresh run is an exact split; a re-run after late payments tops up
+ * the lighter panel instead of piling onto the first.
+ */
+export async function assignTrackToPanelsAtomically(input: {
+  roundId: string;
+  trackId: string;
+  panelIds: string[];
+  includeAssigned: boolean;
+  adminId: string;
+}) {
+  const panelIds = input.panelIds;
+  if (panelIds.length === 0) throw new Error("Pick at least one panel");
+  if (new Set(panelIds).size !== panelIds.length)
+    throw new Error("A panel is listed twice");
 
-    return tx
-      .insert(teamPanelAssignments)
-      .values(
-        input.teamIds.map((teamId) => ({
-          teamId,
-          roundId: input.roundId,
-          panelId: input.panelId,
-          panelType: panel.type,
-          assignedBy: input.adminId,
-        })),
+  return db.transaction(async (tx) => {
+    const panelRows = await tx
+      .select({ id: panels.id, type: panels.type })
+      .from(panels)
+      .where(inArray(panels.id, panelIds));
+
+    if (panelRows.length !== panelIds.length)
+      throw new Error("Panel not found");
+    const panelType = panelRows[0].type;
+    if (panelRows.some((panel) => panel.type !== panelType))
+      throw new Error("Pick panels of one type");
+
+    await assertRoundExists(tx, input.roundId);
+
+    const trackTeams = await tx
+      .select({ id: teams.id })
+      .from(teams)
+      .where(
+        and(
+          eq(teams.trackId, input.trackId),
+          eq(teams.status, "accepted"),
+          eq(teams.paymentStatus, "paid"),
+        ),
       )
-      .onConflictDoUpdate({
-        target: [
-          teamPanelAssignments.teamId,
-          teamPanelAssignments.roundId,
-          teamPanelAssignments.panelType,
-        ],
-        set: {
-          panelId: input.panelId,
-          assignedBy: input.adminId,
-          assignedAt: new Date(),
-        },
-      })
-      .returning();
+      .orderBy(teams.teamName);
+
+    const existing =
+      trackTeams.length === 0
+        ? []
+        : await tx
+            .select({
+              teamId: teamPanelAssignments.teamId,
+              panelId: teamPanelAssignments.panelId,
+            })
+            .from(teamPanelAssignments)
+            .where(
+              and(
+                eq(teamPanelAssignments.roundId, input.roundId),
+                eq(teamPanelAssignments.panelType, panelType),
+                inArray(
+                  teamPanelAssignments.teamId,
+                  trackTeams.map((team) => team.id),
+                ),
+              ),
+            );
+    const assignedTo = new Map(
+      existing.map((row) => [row.teamId, row.panelId]),
+    );
+
+    const picked = input.includeAssigned
+      ? trackTeams
+      : trackTeams.filter((team) => !assignedTo.has(team.id));
+
+    const load = new Map(panelIds.map((id) => [id, 0]));
+    if (!input.includeAssigned) {
+      for (const panelId of assignedTo.values()) {
+        const held = load.get(panelId);
+        if (held !== undefined) load.set(panelId, held + 1);
+      }
+    }
+
+    const perPanel: Record<string, number> = Object.fromEntries(
+      panelIds.map((id) => [id, 0]),
+    );
+    const rows = picked.map((team) => {
+      // Ties go to the earlier panel in `panelIds`.
+      let target = panelIds[0];
+      for (const id of panelIds) {
+        if ((load.get(id) ?? 0) < (load.get(target) ?? 0)) target = id;
+      }
+      load.set(target, (load.get(target) ?? 0) + 1);
+      perPanel[target] += 1;
+      return { teamId: team.id, panelId: target };
+    });
+
+    if (rows.length > 0) {
+      await upsertAssignments(tx, rows, {
+        roundId: input.roundId,
+        panelType,
+        adminId: input.adminId,
+      });
+    }
+
+    return {
+      assigned: rows.length,
+      skipped: trackTeams.length - picked.length,
+      perPanel,
+    };
   });
 }
 

@@ -26,6 +26,7 @@ import {
 } from "@/db/schema";
 import {
   assignTeamsToPanelAtomically,
+  assignTrackToPanelsAtomically,
   type ScoreCriteria,
   setPanelJudgesAtomically,
   upsertPanelScoreAtomically,
@@ -392,6 +393,35 @@ export async function assignTeamsToPanel(
   return rows;
 }
 
+/**
+ * Bulk assignment by track. Two or more panels split the track evenly; see
+ * `assignTrackToPanelsAtomically` for how.
+ */
+export async function assignTrackToPanels(
+  roundId: string,
+  trackId: string,
+  panelIds: string[],
+  includeAssigned: boolean,
+) {
+  const admin = await requireAdminRole(["super_admin"]);
+  const result = await assignTrackToPanelsAtomically({
+    roundId,
+    trackId,
+    panelIds,
+    includeAssigned,
+    adminId: admin.id,
+  });
+  log(admin.id, "panel.assign_track", "track", trackId, {
+    roundId,
+    panelIds,
+    includeAssigned,
+    ...result,
+  });
+  revalidatePath("/admin/panels");
+  revalidatePath("/panel", "layout");
+  return result;
+}
+
 export async function getPanelAdminData(roundId?: string) {
   await requireAdminRole(["super_admin"]);
 
@@ -409,6 +439,7 @@ export async function getPanelAdminData(roundId?: string) {
         .select({
           id: teams.id,
           teamName: teams.teamName,
+          trackId: teams.trackId,
           trackName: tracks.name,
           status: teams.status,
           paymentStatus: teams.paymentStatus,

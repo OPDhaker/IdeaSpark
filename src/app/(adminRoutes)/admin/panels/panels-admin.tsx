@@ -5,6 +5,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { useState } from "react";
 import {
   assignTeamsToPanel,
+  assignTrackToPanels,
   createPanel,
   deletePanel,
   type getPanelAdminData,
@@ -41,13 +42,16 @@ export function PanelsAdmin({ data }: { data: PanelAdminData }) {
     router.push(`/admin/panels?${params.toString()}`);
   }
 
-  async function run(action: () => Promise<unknown>, message: string) {
+  async function run<T>(
+    action: () => Promise<T>,
+    message: string | ((result: T) => string),
+  ) {
     setPending(true);
     setError("");
     setNotice("");
     try {
-      await action();
-      setNotice(message);
+      const result = await action();
+      setNotice(typeof message === "string" ? message : message(result));
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Action failed.");
     } finally {
@@ -64,6 +68,8 @@ export function PanelsAdmin({ data }: { data: PanelAdminData }) {
   );
   const judgesOf = (panelId: string) =>
     data.judges.filter((judge) => judge.panelId === panelId);
+  const panelName = (panelId: string) =>
+    data.panels.find((panel) => panel.id === panelId)?.name ?? "panel";
 
   return (
     <section className="mt-10 border border-[#17201d]/15 bg-white p-6">
@@ -264,6 +270,33 @@ export function PanelsAdmin({ data }: { data: PanelAdminData }) {
             per round.
           </p>
 
+          <TrackAssigner
+            data={data}
+            roundId={roundId}
+            pending={pending}
+            panelOf={panelOf}
+            onAssign={(trackName, panelIds, includeAssigned, trackId) =>
+              run(
+                () =>
+                  assignTrackToPanels(
+                    roundId,
+                    trackId,
+                    panelIds,
+                    includeAssigned,
+                  ),
+                (result) => {
+                  const split = panelIds
+                    .map((id) => `${panelName(id)} ${result.perPanel[id] ?? 0}`)
+                    .join(", ");
+                  const skipped = result.skipped
+                    ? `, ${result.skipped} already assigned skipped`
+                    : "";
+                  return `${trackName}: ${result.assigned} teams assigned (${split})${skipped}.`;
+                },
+              )
+            }
+          />
+
           <ul className="mt-4 divide-y divide-[#17201d]/10 border border-[#17201d]/15">
             {data.teams.map((team) => (
               <li
@@ -272,6 +305,11 @@ export function PanelsAdmin({ data }: { data: PanelAdminData }) {
               >
                 <span className="min-w-0 truncate text-sm">
                   {team.teamName}
+                  {team.trackName ? (
+                    <span className="ml-2 text-xs text-[#17201d]/50">
+                      {team.trackName}
+                    </span>
+                  ) : null}
                 </span>
                 <div className="flex flex-wrap gap-2">
                   {PANEL_TYPE_KEYS.map((type) => (
@@ -314,5 +352,184 @@ export function PanelsAdmin({ data }: { data: PanelAdminData }) {
         </div>
       </div>
     </section>
+  );
+}
+
+/**
+ * Bulk assignment by track. Ticking two panels splits the track between them,
+ * which is how a big track like Open Innovation gets halved. The preview is
+ * the same lightest-panel deal the server does, from what this page knows; the
+ * server re-reads the teams, so its count is the one that sticks.
+ */
+function TrackAssigner({
+  data,
+  roundId,
+  pending,
+  panelOf,
+  onAssign,
+}: {
+  data: PanelAdminData;
+  roundId: string;
+  pending: boolean;
+  panelOf: Map<string, string>;
+  onAssign: (
+    trackName: string,
+    panelIds: string[],
+    includeAssigned: boolean,
+    trackId: string,
+  ) => void;
+}) {
+  const [trackId, setTrackId] = useState("");
+  const [panelType, setPanelType] = useState<PanelType>("main");
+  const [panelIds, setPanelIds] = useState<string[]>([]);
+  const [includeAssigned, setIncludeAssigned] = useState(false);
+
+  const tracks = new Map<string, { name: string; count: number }>();
+  for (const team of data.teams) {
+    if (!team.trackId) continue;
+    const track = tracks.get(team.trackId);
+    if (track) track.count += 1;
+    else tracks.set(team.trackId, { name: team.trackName ?? "", count: 1 });
+  }
+
+  const typePanels = data.panels.filter((panel) => panel.type === panelType);
+  const trackTeams = data.teams.filter((team) => team.trackId === trackId);
+  const assignedOf = (teamId: string) => panelOf.get(`${teamId}:${panelType}`);
+  const picked = includeAssigned
+    ? trackTeams
+    : trackTeams.filter((team) => !assignedOf(team.id));
+
+  const load = new Map(panelIds.map((id) => [id, 0]));
+  if (!includeAssigned) {
+    for (const team of trackTeams) {
+      const held = assignedOf(team.id);
+      if (held && load.has(held)) load.set(held, (load.get(held) ?? 0) + 1);
+    }
+  }
+  const share = new Map(panelIds.map((id) => [id, 0]));
+  for (let i = 0; i < picked.length && panelIds.length > 0; i++) {
+    let target = panelIds[0];
+    for (const id of panelIds) {
+      if ((load.get(id) ?? 0) < (load.get(target) ?? 0)) target = id;
+    }
+    load.set(target, (load.get(target) ?? 0) + 1);
+    share.set(target, (share.get(target) ?? 0) + 1);
+  }
+
+  const track = tracks.get(trackId);
+  const ready = Boolean(
+    roundId && track && panelIds.length > 0 && picked.length,
+  );
+
+  return (
+    <form
+      className="mt-4 border border-[#17201d]/15 bg-[#f7f6f3] p-4"
+      onSubmit={(event) => {
+        event.preventDefault();
+        if (!ready || !track) return;
+        onAssign(track.name, panelIds, includeAssigned, trackId);
+      }}
+    >
+      <p className="text-sm font-medium">Assign by track</p>
+      <p className="mt-1 text-xs text-[#17201d]/55">
+        Tick two panels to split a track evenly between them.
+      </p>
+
+      <div className="mt-3 flex flex-wrap gap-2">
+        <select
+          value={trackId}
+          aria-label="Track"
+          onChange={(event) => setTrackId(event.target.value)}
+          className="min-w-0 flex-1 border border-[#17201d]/20 bg-white px-2 py-1.5 text-sm"
+        >
+          <option value="">Pick a track</option>
+          {[...tracks].map(([id, item]) => (
+            <option key={id} value={id}>
+              {item.name} | {item.count} teams
+            </option>
+          ))}
+        </select>
+        <select
+          value={panelType}
+          aria-label="Panel type"
+          onChange={(event) => {
+            setPanelType(event.target.value as PanelType);
+            setPanelIds([]);
+          }}
+          className="border border-[#17201d]/20 bg-white px-2 py-1.5 text-sm"
+        >
+          {PANEL_TYPE_KEYS.map((type) => (
+            <option key={type} value={type}>
+              {PANEL_TYPES[type].label}
+            </option>
+          ))}
+        </select>
+      </div>
+
+      <fieldset className="mt-3">
+        <legend className="text-xs text-[#17201d]/55">Panels</legend>
+        <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1.5">
+          {typePanels.map((panel) => (
+            <label key={panel.id} className="flex items-center gap-2 text-sm">
+              <input
+                type="checkbox"
+                checked={panelIds.includes(panel.id)}
+                disabled={pending}
+                onChange={(event) =>
+                  setPanelIds((current) =>
+                    event.target.checked
+                      ? [...current, panel.id]
+                      : current.filter((id) => id !== panel.id),
+                  )
+                }
+              />
+              {panel.name}
+            </label>
+          ))}
+          {typePanels.length === 0 ? (
+            <p className="text-sm text-[#17201d]/55">
+              No {PANEL_TYPES[panelType].label} panels yet.
+            </p>
+          ) : null}
+        </div>
+      </fieldset>
+
+      <label className="mt-3 flex items-center gap-2 text-sm">
+        <input
+          type="checkbox"
+          checked={includeAssigned}
+          disabled={pending}
+          onChange={(event) => setIncludeAssigned(event.target.checked)}
+        />
+        Also move teams already assigned
+      </label>
+
+      <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
+        <p className="text-xs text-[#17201d]/60">
+          {!track
+            ? "Pick a track to see the split."
+            : picked.length === 0
+              ? "Every team in this track already has a panel of this type."
+              : panelIds.length === 0
+                ? `${picked.length} teams to assign. Tick a panel.`
+                : `${picked.length} teams | ${panelIds
+                    .map(
+                      (id) =>
+                        `${typePanels.find((panel) => panel.id === id)?.name ?? "panel"} ${share.get(id) ?? 0}`,
+                    )
+                    .join(" / ")}`}
+        </p>
+        <button
+          type="submit"
+          disabled={pending || !ready}
+          className="flex items-center gap-1.5 bg-[#17201d] px-4 py-2 text-sm text-white disabled:opacity-50"
+        >
+          {pending ? (
+            <Loader2 aria-hidden className="size-4 animate-spin" />
+          ) : null}
+          Assign {picked.length || ""} teams
+        </button>
+      </div>
+    </form>
   );
 }
