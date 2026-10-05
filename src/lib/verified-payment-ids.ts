@@ -41,4 +41,6 @@ export const VERIFIED_PAYMENT_IDS: readonly string[] = [
   "pay_TjrBlPG2b1o8EI",
   "pay_TjrC7pDV0RKXaT",
   "pay_TjrLF77G3x6Llt",
+  "pay_TjrrH5sE3GhwdQ",
+  "pay_TjrzkqnDTxzORJ",
 ];
