@@ -536,6 +536,25 @@ export async function getDayTwoQualifiers(dayOne: string) {
   );
 }
 
+/**
+ * Which teams may be put in front of a panel for this round: the Day 2
+ * qualifiers for the round that runs on `day_two`, or `null` (no gate) for
+ * any other round. Same line as the door scanner, so a team can't be given a
+ * panel it will never be let in to see.
+ */
+export async function getRoundQualifiers(roundId: string) {
+  const [[round], config] = await Promise.all([
+    db
+      .select({ eventDate: evaluationRounds.eventDate })
+      .from(evaluationRounds)
+      .where(eq(evaluationRounds.id, roundId))
+      .limit(1),
+    getEventConfig(),
+  ]);
+  if (!round || !config || round.eventDate !== config.dayTwo) return null;
+  return getDayTwoQualifiers(config.dayOne);
+}
+
 export async function getActiveRound() {
   const [round] = await db
     .select()

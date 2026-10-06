@@ -752,6 +752,8 @@ export async function assignTrackToPanelsAtomically(input: {
   panelIds: string[];
   includeAssigned: boolean;
   adminId: string;
+  /** Day 2 qualifiers; `null` lets every accepted, paid team through. */
+  allowedTeamIds?: Set<string> | null;
 }) {
   const panelIds = input.panelIds;
   if (panelIds.length === 0) throw new Error("Pick at least one panel");
@@ -772,17 +774,20 @@ export async function assignTrackToPanelsAtomically(input: {
 
     await assertRoundExists(tx, input.roundId);
 
-    const trackTeams = await tx
-      .select({ id: teams.id })
-      .from(teams)
-      .where(
-        and(
-          eq(teams.trackId, input.trackId),
-          eq(teams.status, "accepted"),
-          eq(teams.paymentStatus, "paid"),
-        ),
-      )
-      .orderBy(teams.teamName);
+    const allowed = input.allowedTeamIds;
+    const trackTeams = (
+      await tx
+        .select({ id: teams.id })
+        .from(teams)
+        .where(
+          and(
+            eq(teams.trackId, input.trackId),
+            eq(teams.status, "accepted"),
+            eq(teams.paymentStatus, "paid"),
+          ),
+        )
+        .orderBy(teams.teamName)
+    ).filter((team) => !allowed || allowed.has(team.id));
 
     const existing =
       trackTeams.length === 0

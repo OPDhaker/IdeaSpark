@@ -11,11 +11,13 @@ import {
   getPanelQueue,
   getPanelsWithJudges,
   getRoundBySlug,
+  getRoundQualifiers,
   listAssignments,
   listEvaluationRounds,
 } from "@/db/queries";
 import {
   admins,
+  DAY_TWO_QUALIFIERS,
   evaluationRounds,
   PANEL_TYPE_KEYS,
   PANEL_TYPES,
@@ -382,6 +384,12 @@ export async function assignTeamsToPanel(
   teamIds: string[],
 ) {
   const admin = await requireAdminRole(["super_admin"]);
+  const qualifiers = await getRoundQualifiers(roundId);
+  if (qualifiers && teamIds.some((id) => !qualifiers.has(id))) {
+    throw new Error(
+      `Only the ISD-1 top ${DAY_TWO_QUALIFIERS} can be assigned in this round`,
+    );
+  }
   const rows = await assignTeamsToPanelAtomically({
     teamIds,
     roundId,
@@ -431,6 +439,7 @@ export async function assignTrackToPanels(
     panelIds,
     includeAssigned,
     adminId: admin.id,
+    allowedTeamIds: await getRoundQualifiers(roundId),
   });
   log(admin.id, "panel.assign_track", "track", trackId, {
     roundId,
@@ -453,7 +462,7 @@ export async function getPanelAdminData(roundId?: string) {
     rounds[0] ??
     null;
 
-  const [{ panels: panelRows, judges }, teamRows, assignments] =
+  const [{ panels: panelRows, judges }, teamRows, assignments, qualifiers] =
     await Promise.all([
       getPanelsWithJudges(),
       db
@@ -472,6 +481,7 @@ export async function getPanelAdminData(roundId?: string) {
         )
         .orderBy(asc(teams.teamName)),
       round ? listAssignments(round.id) : Promise.resolve([]),
+      round ? getRoundQualifiers(round.id) : Promise.resolve(null),
     ]);
 
   // Only these two roles can score, so only they can sit on a panel.
@@ -491,7 +501,11 @@ export async function getPanelAdminData(roundId?: string) {
     round,
     panels: panelRows,
     judges,
-    teams: teamRows,
+    // Day 2 round: only the ISD-1 qualifiers can be given a panel.
+    teams: qualifiers
+      ? teamRows.filter((team) => qualifiers.has(team.id))
+      : teamRows,
+    dayTwoGate: qualifiers !== null,
     assignments,
     evaluators,
   };

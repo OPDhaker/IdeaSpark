@@ -12,6 +12,7 @@ import {
   setPanelJudges,
 } from "@/actions/panel";
 import {
+  DAY_TWO_QUALIFIERS,
   PANEL_TYPE_KEYS,
   PANEL_TYPES,
   type PanelType,
@@ -266,8 +267,10 @@ export function PanelsAdmin({ data }: { data: PanelAdminData }) {
             Teams · {round?.name ?? "no round"}
           </h3>
           <p className="mt-1 text-sm text-[#17201d]/55">
-            Accepted and paid teams only. A team needs one panel of each type
-            per round.
+            {data.dayTwoGate
+              ? `Day 2: only the ISD-1 top ${DAY_TWO_QUALIFIERS} (ties included) | ${data.teams.length} teams.`
+              : "Accepted and paid teams only."}{" "}
+            A team needs one panel of each type per round.
           </p>
 
           <TrackAssigner
@@ -345,7 +348,9 @@ export function PanelsAdmin({ data }: { data: PanelAdminData }) {
             ))}
             {data.teams.length === 0 ? (
               <li className="px-4 py-3 text-sm text-[#17201d]/55">
-                No accepted, paid teams yet.
+                {data.dayTwoGate
+                  ? "No ISD-1 scores yet, so nobody has qualified."
+                  : "No accepted, paid teams yet."}
               </li>
             ) : null}
           </ul>

@@ -1,5 +1,9 @@
 import { CalendarX } from "lucide-react";
-import { getTeamPanelDirectory, listEvaluationRounds } from "@/db/queries";
+import {
+  getRoundQualifiers,
+  getTeamPanelDirectory,
+  listEvaluationRounds,
+} from "@/db/queries";
 import { requireAdminRole } from "@/lib/roles";
 import { AutoRefresh } from "./_components/auto-refresh";
 import { TeamPanelList } from "./_components/team-panel-list";
@@ -48,7 +52,14 @@ export default async function TeamPanelsPage({
     );
   }
 
-  const rows = await getTeamPanelDirectory(selected.id);
+  const [directory, qualifiers] = await Promise.all([
+    getTeamPanelDirectory(selected.id),
+    getRoundQualifiers(selected.id),
+  ]);
+  // Day 2: a team that didn't qualify isn't "Not assigned", it isn't coming.
+  const rows = qualifiers
+    ? directory.filter((row) => row.panelId || qualifiers.has(row.teamId))
+    : directory;
 
   return (
     <Shell>
